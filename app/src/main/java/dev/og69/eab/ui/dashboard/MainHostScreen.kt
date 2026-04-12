@@ -18,6 +18,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.lifecycle.viewmodel.compose.viewModel
 
 @Composable
 fun MainHostScreen(
@@ -26,6 +27,8 @@ fun MainHostScreen(
     modifier: Modifier = Modifier
 ) {
     var selectedTab by remember { mutableIntStateOf(0) }
+
+    val sharedViewModel: DashboardViewModel = viewModel()
 
     Scaffold(
         modifier = modifier.fillMaxSize(),
@@ -54,8 +57,8 @@ fun MainHostScreen(
     ) { padding ->
         Box(Modifier.padding(padding).fillMaxSize()) {
             when (selectedTab) {
-                0 -> DashboardScreen(onSignOut = onSignOut, onEditProfile = onEditProfile)
-                1 -> LocationScreen(onSignOut = onSignOut)
+                0 -> DashboardScreen(onSignOut = onSignOut, onEditProfile = onEditProfile, viewModel = sharedViewModel)
+                1 -> LocationScreen(onSignOut = onSignOut, viewModel = sharedViewModel)
                 2 -> RightEmptyScreen()
             }
         }

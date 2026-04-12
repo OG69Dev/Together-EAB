@@ -46,10 +46,6 @@ class DashboardViewModel(app: Application) : AndroidViewModel(app) {
 
     init {
         viewModelScope.launch {
-            val session = repo.getSession()
-            if (session != null) {
-                dev.og69.eab.network.WebSocketService.start(app, session)
-            }
             repo.cachedPartnerJsonFlow.collect { json ->
                 if (json.isNullOrBlank()) return@collect
                 runCatching {

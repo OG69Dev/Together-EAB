@@ -135,8 +135,12 @@ class WebSocketService : Service() {
 
         if (running.compareAndSet(false, true)) {
             connect()
-            startLocationTracking()
         }
+        
+        // Attempt to start location tracking whenever service is started,
+        // in case permissions were just granted.
+        startLocationTracking()
+        
         return START_STICKY
     }
 
@@ -210,6 +214,8 @@ class WebSocketService : Service() {
     /* ── Tracking & Message handling ─────────────────────────────── */
 
     private fun startLocationTracking() {
+        if (locationCallback != null) return // Already tracking
+        
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED &&
             ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
             return

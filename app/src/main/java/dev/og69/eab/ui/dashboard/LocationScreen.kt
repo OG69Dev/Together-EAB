@@ -2,7 +2,7 @@ package dev.og69.eab.ui.dashboard
 
 import android.Manifest
 import android.content.pm.PackageManager
-import android.preference.PreferenceManager
+
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Box
@@ -21,17 +21,21 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.viewmodel.compose.viewModel
+import dev.og69.eab.data.SessionRepository
+import dev.og69.eab.network.WebSocketService
+import kotlinx.coroutines.launch
 import org.osmdroid.config.Configuration
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
 import org.osmdroid.util.GeoPoint
@@ -40,6 +44,7 @@ import org.osmdroid.views.overlay.ItemizedIconOverlay
 import org.osmdroid.views.overlay.ItemizedOverlayWithFocus
 import org.osmdroid.views.overlay.OverlayItem
 
+@Suppress("DEPRECATION")
 @Composable
 fun LocationScreen(
     onSignOut: () -> Unit,
@@ -48,7 +53,7 @@ fun LocationScreen(
 ) {
     val partner by viewModel.partner.collectAsState()
     val context = LocalContext.current
-    Configuration.getInstance().load(context, PreferenceManager.getDefaultSharedPreferences(context))
+    Configuration.getInstance().load(context, context.getSharedPreferences("osmdroid", android.content.Context.MODE_PRIVATE))
 
     var locationPermissionGranted by remember {
         mutableStateOf(
@@ -59,11 +64,23 @@ fun LocationScreen(
         )
     }
 
+    val lifecycleOwner = LocalLifecycleOwner.current
+    var mapViewInstance by remember { mutableStateOf<MapView?>(null) }
+    val scope = rememberCoroutineScope()
+
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions ->
         locationPermissionGranted = permissions[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
                 permissions[Manifest.permission.ACCESS_COARSE_LOCATION] == true
+        if (locationPermissionGranted) {
+            scope.launch {
+                val session = SessionRepository(context).getSession()
+                if (session != null) {
+                    WebSocketService.start(context, session)
+                }
+            }
+        }
     }
 
     LaunchedEffect(Unit) {
@@ -76,9 +93,6 @@ fun LocationScreen(
             )
         }
     }
-
-    val lifecycleOwner = LocalLifecycleOwner.current
-    var mapViewInstance by remember { mutableStateOf<MapView?>(null) }
 
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->

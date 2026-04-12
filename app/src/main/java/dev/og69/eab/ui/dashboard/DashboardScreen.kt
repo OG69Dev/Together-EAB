@@ -62,7 +62,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -504,8 +504,31 @@ private fun sanitizeDisplay(s: String?): String? {
     return t
 }
 
+private fun getMappedAppName(context: Context, packageName: String?, label: String?): String? {
+    if (packageName == null) return label
+    
+    val lowerPkg = packageName.lowercase()
+    if (lowerPkg.contains("launcher") || 
+        lowerPkg.contains("systemui") || 
+        lowerPkg == "com.miui.home" ||
+        lowerPkg == "com.sec.android.app.launcher" ||
+        lowerPkg == "com.samsung.android.app.cocktailbarservice") {
+        return "Not on anything"
+    }
+
+    return try {
+        val pm = context.packageManager
+        val info = pm.getApplicationInfo(packageName, 0)
+        val appLabel = pm.getApplicationLabel(info).toString()
+        if (appLabel.isNotBlank()) appLabel else label
+    } catch (e: Exception) {
+        label ?: packageName
+    }
+}
+
 @Composable
 private fun PartnerCard(response: CoupleApi.PartnerResponse?) {
+    val context = LocalContext.current
     Card(
         modifier = Modifier.fillMaxWidth(),
         elevation = CardDefaults.cardElevation(defaultElevation = 3.dp),
@@ -586,8 +609,9 @@ private fun PartnerCard(response: CoupleApi.PartnerResponse?) {
                             style = MaterialTheme.typography.labelLarge,
                             color = MaterialTheme.colorScheme.primary,
                         )
-                        val appTitle = sanitizeDisplay(t.foregroundAppLabel)
+                        val rawAppTitle = sanitizeDisplay(t.foregroundAppLabel)
                             ?: sanitizeDisplay(t.foregroundPackage)
+                        val appTitle = getMappedAppName(context, t.foregroundPackage, rawAppTitle)
                         Text(
                             appTitle ?: stringResource(R.string.unknown_app),
                             style = MaterialTheme.typography.titleMedium,
@@ -777,7 +801,9 @@ private fun UsageStatRow(
     row: CoupleApi.UsageStatItem,
     maxMs: Long,
 ) {
-    val displayName = row.label.ifBlank { row.packageName }
+    val context = LocalContext.current
+    val rawName = row.label.ifBlank { row.packageName }
+    val displayName = getMappedAppName(context, row.packageName, rawName) ?: rawName
     val progress = (row.ms / maxMs.toFloat()).coerceIn(0f, 1f)
     Column(
         Modifier
