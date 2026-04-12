@@ -57,9 +57,7 @@ import org.osmdroid.tileprovider.tilesource.TileSourceFactory
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.util.MapTileIndex
 import org.osmdroid.views.MapView
-import org.osmdroid.views.overlay.ItemizedIconOverlay
-import org.osmdroid.views.overlay.ItemizedOverlayWithFocus
-import org.osmdroid.views.overlay.OverlayItem
+import org.osmdroid.views.overlay.Marker
 
 val EsriSatelliteTileSource = object : OnlineTileSourceBase(
     "EsriSatellite",
@@ -214,24 +212,12 @@ fun LocationScreen(
                     val geoPoint = GeoPoint(partnerLocation.lat, partnerLocation.lng)
                     mapView.controller.setCenter(geoPoint)
 
-                    val items = ArrayList<OverlayItem>()
-                    val title = partner?.partnerName ?: "Partner"
-                    items.add(OverlayItem(title, "Updated recently", geoPoint))
-
-                    val overlay = ItemizedOverlayWithFocus(
-                        items,
-                        object : ItemizedIconOverlay.OnItemGestureListener<OverlayItem> {
-                            override fun onItemSingleTapUp(index: Int, item: OverlayItem): Boolean {
-                                return true
-                            }
-                            override fun onItemLongPress(index: Int, item: OverlayItem): Boolean {
-                                return false
-                            }
-                        },
-                        context
-                    )
-                    overlay.setFocusItemsOnTap(true)
-                    mapView.overlays.add(overlay)
+                    val marker = Marker(mapView)
+                    marker.position = geoPoint
+                    marker.setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+                    marker.title = partner?.partnerName ?: "Partner"
+                    marker.snippet = "Updated recently"
+                    mapView.overlays.add(marker)
                     mapView.invalidate()
                 }
             )

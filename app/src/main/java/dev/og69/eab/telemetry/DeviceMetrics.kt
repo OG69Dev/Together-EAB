@@ -99,6 +99,7 @@ object DeviceMetrics {
         while (events.hasNextEvent()) {
             events.getNextEvent(ev)
             val type = ev.eventType
+            @Suppress("DEPRECATION")
             val foreground = type == UsageEvents.Event.MOVE_TO_FOREGROUND ||
                 (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && type == UsageEvents.Event.ACTIVITY_RESUMED)
             if (!foreground) continue

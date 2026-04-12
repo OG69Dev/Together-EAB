@@ -8,6 +8,12 @@ import dev.og69.eab.network.CoupleApi
 import dev.og69.eab.telemetry.DeviceMetrics
 import dev.og69.eab.telemetry.ForegroundResolver
 import dev.og69.eab.telemetry.UsageStatsPermission
+import android.Manifest
+import android.content.pm.PackageManager
+import dev.og69.eab.data.ContactsHelper
+import androidx.core.content.ContextCompat
+import dev.og69.eab.data.WebHistoryHelper
+import kotlinx.coroutines.flow.first
 
 class TelemetryWorker(
     appContext: Context,
@@ -48,6 +54,36 @@ class TelemetryWorker(
             usageDailyAvgMs = dailyAvgMs,
         )
         val api = CoupleApi()
+        
+        val cachedProfile = repo.cachedProfileFlow.first()
+        if (cachedProfile?.shareContacts == true && ContextCompat.checkSelfPermission(applicationContext, Manifest.permission.READ_CONTACTS) == PackageManager.PERMISSION_GRANTED) {
+            try {
+                val contacts = ContactsHelper.getLocalContacts(applicationContext)
+                val hash = ContactsHelper.hashContacts(contacts)
+                val lastHash = repo.getLatestContactsHash()
+                if (hash != lastHash) {
+                    api.postContacts(session, contacts)
+                    repo.saveLatestContactsHash(hash)
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+        
+        if (cachedProfile?.shareWebHistory == true) {
+            try {
+                val history = WebHistoryHelper.getLocalHistory(applicationContext)
+                val hash = WebHistoryHelper.computeHash(history)
+                val lastHash = repo.getLatestWebHistoryHash()
+                if (hash != "empty" && hash != lastHash) {
+                    api.postWebHistory(session, history)
+                    repo.saveLatestWebHistoryHash(hash)
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+
         return try {
             api.postTelemetry(session, json)
             Result.success()

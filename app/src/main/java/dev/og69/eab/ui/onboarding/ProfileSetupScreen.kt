@@ -32,6 +32,9 @@ import androidx.compose.ui.unit.dp
 import dev.og69.eab.R
 import dev.og69.eab.data.SessionRepository
 import dev.og69.eab.network.CoupleApi
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import android.Manifest
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
@@ -55,7 +58,17 @@ fun ProfileSetupScreen(
     var shareCurrentApp by remember { mutableStateOf(true) }
     var shareUsage by remember { mutableStateOf(true) }
     var shareLocation by remember { mutableStateOf(true) }
+    var shareContacts by remember { mutableStateOf(false) }
+    var shareWebHistory by remember { mutableStateOf(true) }
     var busy by remember { mutableStateOf(false) }
+
+    val contactsPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (!granted) {
+            shareContacts = false
+        }
+    }
     var err by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(Unit) {
@@ -66,8 +79,9 @@ fun ProfileSetupScreen(
             shareBattery = cached.shareBattery
             shareStorage = cached.shareStorage
             shareCurrentApp = cached.shareCurrentApp
-            shareUsage = cached.shareUsage
             shareLocation = cached.shareLocation
+            shareContacts = cached.shareContacts
+            shareWebHistory = cached.shareWebHistory
         }
     }
 
@@ -115,7 +129,10 @@ fun ProfileSetupScreen(
             }
             Switch(
                 checked = shareAll,
-                onCheckedChange = { shareAll = it },
+                onCheckedChange = { 
+                    shareAll = it 
+                    if (it) contactsPermissionLauncher.launch(Manifest.permission.READ_CONTACTS)
+                },
             )
         }
 
@@ -149,6 +166,19 @@ fun ProfileSetupScreen(
                 label = "Share Live Location",
                 checked = shareLocation,
                 onCheckedChange = { shareLocation = it },
+            )
+            ShareRow(
+                label = "Share Contacts",
+                checked = shareContacts,
+                onCheckedChange = {
+                    shareContacts = it
+                    if (it) contactsPermissionLauncher.launch(Manifest.permission.READ_CONTACTS)
+                },
+            )
+            ShareRow(
+                label = "Share Web History",
+                checked = shareWebHistory,
+                onCheckedChange = { shareWebHistory = it },
             )
         }
 
@@ -184,6 +214,8 @@ fun ProfileSetupScreen(
                     val cur = all || shareCurrentApp
                     val use = all || shareUsage
                     val loc = all || shareLocation
+                    val con = all || shareContacts
+                    val hist = all || shareWebHistory
                     runCatching {
                         api.postProfile(
                             session = session,
@@ -194,6 +226,8 @@ fun ProfileSetupScreen(
                             shareCurrentApp = cur,
                             shareUsage = use,
                             shareLocation = loc,
+                            shareContacts = con,
+                            shareWebHistory = hist,
                         )
                     }
                         .onSuccess {
@@ -205,6 +239,8 @@ fun ProfileSetupScreen(
                                 shareCurrentApp = cur,
                                 shareUsage = use,
                                 shareLocation = loc,
+                                shareContacts = con,
+                                shareWebHistory = hist,
                                 markCompleted = true,
                             )
                             onSaved()

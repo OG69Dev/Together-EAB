@@ -8,6 +8,9 @@ package dev.og69.eab
  * **Wrangler dev on Android Emulator:** use the host loopback alias (not 127.0.0.1):
  * `http://10.0.2.2:8787`
  *
+ * Main API
+ * 'https://connect.eab.og69.dev/'
+ * 
  * **Wrangler dev on a physical phone:** use your PC’s LAN IP, e.g. `http://192.168.1.10:8787`,
  * and run Wrangler so it listens on all interfaces, e.g. `npx wrangler dev --ip 0.0.0.0`.
  *

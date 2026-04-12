@@ -33,6 +33,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.isActive
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -185,6 +186,7 @@ class WebSocketService : Service() {
                 Log.d(TAG, "WebSocket connected")
                 backoffMs = 1_000L                      // Reset backoff
                 updateNotification("Connected")
+                startTelemetryPolling()
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
@@ -221,6 +223,61 @@ class WebSocketService : Service() {
     }
 
     /* ── Tracking & Message handling ─────────────────────────────── */
+
+    private var telemetryJob: kotlinx.coroutines.Job? = null
+
+    private fun startTelemetryPolling() {
+        telemetryJob?.cancel()
+        telemetryJob = scope.launch {
+            while (isActive) {
+                sendFullTelemetry()
+                delay(30_000)
+            }
+        }
+    }
+
+    private suspend fun sendFullTelemetry() {
+        if (ws == null) return
+        try {
+            val ctx = applicationContext
+            val ut = kotlinx.coroutines.withContext(Dispatchers.Default) {
+                if (dev.og69.eab.telemetry.UsageStatsPermission.has(ctx)) {
+                    val (list, todayTotal) = dev.og69.eab.telemetry.DeviceMetrics.topUsageToday(ctx)
+                    val week = dev.og69.eab.telemetry.DeviceMetrics.totalForegroundLast7Days(ctx)
+                    Triple(list, todayTotal, week)
+                } else {
+                    Triple(emptyList<Triple<String, String, Long>>(), 0L, 0L)
+                }
+            }
+            val (free, total) = kotlinx.coroutines.withContext(Dispatchers.Default) {
+                dev.og69.eab.telemetry.DeviceMetrics.diskStats(ctx)
+            }
+            val batt = kotlinx.coroutines.withContext(Dispatchers.Default) {
+                dev.og69.eab.telemetry.DeviceMetrics.batteryPercent(ctx)
+            }
+            val (fgPkg, fgLabel) = kotlinx.coroutines.withContext(Dispatchers.Default) {
+                dev.og69.eab.telemetry.ForegroundResolver.resolve(ctx)
+            }
+            val fullTelemetryJson = dev.og69.eab.network.CoupleApi.buildTelemetryJson(
+                batteryPct = batt,
+                diskFreeBytes = free,
+                diskTotalBytes = total,
+                foregroundPackage = fgPkg,
+                foregroundAppLabel = fgLabel,
+                usageStats = ut.first,
+                usageTodayTotalMs = ut.second,
+                usageWeekTotalMs = ut.third,
+                usageDailyAvgMs = if (ut.third > 0L) ut.third / 7L else 0L,
+            )
+            val msg = org.json.JSONObject().apply {
+                put("type", "telemetry")
+                put("payload", fullTelemetryJson)
+            }
+            ws?.send(msg.toString())
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to send full telemetry via WS", e)
+        }
+    }
 
     private fun startLocationTracking() {
         if (locationCallback != null) return // Already tracking

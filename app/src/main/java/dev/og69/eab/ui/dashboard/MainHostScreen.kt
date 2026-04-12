@@ -16,19 +16,34 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
+
+import androidx.compose.ui.platform.LocalContext
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.delay
+
+import dev.og69.eab.work.TelemetryWorkScheduler
 
 @Composable
 fun MainHostScreen(
     onSignOut: () -> Unit,
     onEditProfile: () -> Unit,
+    onNavigateToContacts: () -> Unit,
+    onNavigateToWebHistory: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    var selectedTab by remember { mutableIntStateOf(0) }
+    var selectedTab by rememberSaveable { mutableIntStateOf(0) }
 
     val sharedViewModel: DashboardViewModel = viewModel()
+    val lifecycleOwner = LocalLifecycleOwner.current
+    val context = LocalContext.current
+
+    // App-wide lifecycle is managed by MainActivity
 
     Scaffold(
         modifier = modifier.fillMaxSize(),
@@ -59,7 +74,7 @@ fun MainHostScreen(
             when (selectedTab) {
                 0 -> DashboardScreen(onSignOut = onSignOut, onEditProfile = onEditProfile, viewModel = sharedViewModel)
                 1 -> LocationScreen(onSignOut = onSignOut, viewModel = sharedViewModel)
-                2 -> RightEmptyScreen()
+                2 -> RightEmptyScreen(onNavigateToContacts = onNavigateToContacts, onNavigateToWebHistory = onNavigateToWebHistory)
             }
         }
     }

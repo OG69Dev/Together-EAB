@@ -40,4 +40,8 @@ class MainActivity : ComponentActivity() {
         setIntent(intent)
         mainViewModel.consumeNotificationIntent(intent)
     }
+    override fun onResume() {
+        super.onResume()
+        dev.og69.eab.work.TelemetryWorkScheduler.enqueueImmediate(applicationContext)
+    }
 }

@@ -21,6 +21,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.isActive
 import org.json.JSONObject
 
 class DashboardViewModel(app: Application) : AndroidViewModel(app) {
@@ -53,6 +54,7 @@ class DashboardViewModel(app: Application) : AndroidViewModel(app) {
                 }
             }
         }
+        // Telemetry loop is managed by WebSocketService natively
     }
 
     fun clearError() {

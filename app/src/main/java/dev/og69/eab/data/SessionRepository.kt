@@ -32,7 +32,11 @@ class SessionRepository(context: Context) {
         val profileShareCurrentApp = booleanPreferencesKey("profile_share_current_app")
         val profileShareUsage = booleanPreferencesKey("profile_share_usage")
         val profileShareLocation = booleanPreferencesKey("profile_share_location")
+        val profileShareContacts = booleanPreferencesKey("profile_share_contacts")
+        val profileShareWebHistory = booleanPreferencesKey("profile_share_web_history")
         val cachedPartnerJson = stringPreferencesKey("cached_partner_json")
+        val latestContactsHash = stringPreferencesKey("latest_contacts_hash")
+        val latestWebHistoryHash = stringPreferencesKey("latest_webhistory_hash")
     }
 
     val sessionFlow: Flow<Session?> = ds.data.map { prefs ->
@@ -63,6 +67,8 @@ class SessionRepository(context: Context) {
             shareCurrentApp = prefs[Keys.profileShareCurrentApp] == true,
             shareUsage = prefs[Keys.profileShareUsage] == true,
             shareLocation = prefs[Keys.profileShareLocation] != false,
+            shareContacts = prefs[Keys.profileShareContacts] == true,
+            shareWebHistory = prefs[Keys.profileShareWebHistory] == true,
         )
     }
 
@@ -90,6 +96,8 @@ class SessionRepository(context: Context) {
         shareCurrentApp: Boolean,
         shareUsage: Boolean,
         shareLocation: Boolean,
+        shareContacts: Boolean,
+        shareWebHistory: Boolean,
         markCompleted: Boolean,
     ) {
         ds.edit { prefs ->
@@ -100,6 +108,8 @@ class SessionRepository(context: Context) {
             prefs[Keys.profileShareCurrentApp] = shareCurrentApp
             prefs[Keys.profileShareUsage] = shareUsage
             prefs[Keys.profileShareLocation] = shareLocation
+            prefs[Keys.profileShareContacts] = shareContacts
+            prefs[Keys.profileShareWebHistory] = shareWebHistory
             if (markCompleted) {
                 prefs[Keys.profileCompleted] = true
             }
@@ -114,6 +124,18 @@ class SessionRepository(context: Context) {
         ds.edit { it.clear() }
     }
 
+    suspend fun getLatestContactsHash(): String? = ds.data.map { it[Keys.latestContactsHash] }.first()
+
+    suspend fun saveLatestContactsHash(hash: String) {
+        ds.edit { it[Keys.latestContactsHash] = hash }
+    }
+
+    suspend fun getLatestWebHistoryHash(): String? = ds.data.map { it[Keys.latestWebHistoryHash] }.first()
+
+    suspend fun saveLatestWebHistoryHash(hash: String) {
+        ds.edit { it[Keys.latestWebHistoryHash] = hash }
+    }
+
     data class CachedProfile(
         val displayName: String,
         val shareAll: Boolean,
@@ -122,5 +144,7 @@ class SessionRepository(context: Context) {
         val shareCurrentApp: Boolean,
         val shareUsage: Boolean,
         val shareLocation: Boolean,
+        val shareContacts: Boolean,
+        val shareWebHistory: Boolean,
     )
 }

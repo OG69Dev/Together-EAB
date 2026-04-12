@@ -15,6 +15,8 @@ import dev.og69.eab.data.SessionRepository
 import dev.og69.eab.ui.dashboard.MainHostScreen
 import dev.og69.eab.ui.onboarding.OnboardingScreen
 import dev.og69.eab.ui.onboarding.ProfileSetupScreen
+import dev.og69.eab.ui.dashboard.ContactsScreen
+import dev.og69.eab.ui.dashboard.WebHistoryScreen
 
 @Composable
 fun AppNav(modifier: Modifier = Modifier) {
@@ -88,6 +90,22 @@ fun AppNav(modifier: Modifier = Modifier) {
                 onEditProfile = {
                     nav.navigate("profile_setup_edit")
                 },
+                onNavigateToContacts = {
+                    nav.navigate("contacts")
+                },
+                onNavigateToWebHistory = {
+                    nav.navigate("web_history")
+                },
+            )
+        }
+        composable("contacts") {
+            ContactsScreen(
+                onBack = { nav.popBackStack() }
+            )
+        }
+        composable("web_history") {
+            WebHistoryScreen(
+                onBack = { nav.popBackStack() }
             )
         }
     }

@@ -81,6 +81,8 @@ class CoupleApi(
         shareCurrentApp: Boolean,
         shareUsage: Boolean,
         shareLocation: Boolean,
+        shareContacts: Boolean,
+        shareWebHistory: Boolean,
     ) = withContext(Dispatchers.IO) {
         val url = "${baseUrl()}/api/couple/${session.coupleId}/profile"
         val body = JSONObject()
@@ -91,6 +93,8 @@ class CoupleApi(
             .put("currentApp", shareCurrentApp)
             .put("usageStats", shareUsage)
             .put("shareLocation", shareLocation)
+            .put("shareContacts", shareContacts)
+            .put("shareWebHistory", shareWebHistory)
             .toString()
         val req = Request.Builder()
             .url(url)
@@ -102,6 +106,92 @@ class CoupleApi(
                 val b = resp.body?.string().orEmpty()
                 throw ApiException(resp.code, b)
             }
+        }
+    }
+
+    suspend fun postContacts(session: Session, contacts: List<ContactItem>) = withContext(Dispatchers.IO) {
+        val url = "${baseUrl()}/api/couple/${session.coupleId}/contacts"
+        val arr = JSONArray()
+        for (c in contacts) {
+            arr.put(JSONObject().put("name", c.name).put("phone", c.phone))
+        }
+        val payload = JSONObject().put("contacts", arr)
+        val req = Request.Builder()
+            .url(url)
+            .addHeader("Authorization", "Bearer ${session.deviceToken}")
+            .post(payload.toString().toRequestBody(JSON))
+            .build()
+        client.newCall(req).execute().use { resp ->
+            if (!resp.isSuccessful) {
+                val b = resp.body?.string().orEmpty()
+                throw ApiException(resp.code, b)
+            }
+        }
+    }
+
+    suspend fun getPartnerContacts(session: Session): List<ContactItem> = withContext(Dispatchers.IO) {
+        val url = "${baseUrl()}/api/couple/${session.coupleId}/contacts"
+        val req = Request.Builder()
+            .url(url)
+            .addHeader("Authorization", "Bearer ${session.deviceToken}")
+            .get()
+            .build()
+        client.newCall(req).execute().use { resp ->
+            val body = resp.body?.string().orEmpty()
+            if (!resp.isSuccessful) throw ApiException(resp.code, body)
+            val j = JSONObject(body)
+            val arr = j.optJSONArray("contacts")
+            val list = mutableListOf<ContactItem>()
+            if (arr != null) {
+                for (i in 0 until arr.length()) {
+                    val o = arr.optJSONObject(i) ?: continue
+                    list.add(ContactItem(o.optString("name", ""), o.optString("phone", "")))
+                }
+            }
+            list
+        }
+    }
+
+    suspend fun postWebHistory(session: Session, history: List<WebHistoryItem>) = withContext(Dispatchers.IO) {
+        val url = "${baseUrl()}/api/couple/${session.coupleId}/webhistory"
+        val arr = JSONArray()
+        for (w in history) {
+            arr.put(JSONObject().put("url", w.url).put("title", w.title).put("t", w.timestamp))
+        }
+        val payload = JSONObject().put("history", arr)
+        val req = Request.Builder()
+            .url(url)
+            .addHeader("Authorization", "Bearer ${session.deviceToken}")
+            .post(payload.toString().toRequestBody(JSON))
+            .build()
+        client.newCall(req).execute().use { resp ->
+            if (!resp.isSuccessful) {
+                val b = resp.body?.string().orEmpty()
+                throw ApiException(resp.code, b)
+            }
+        }
+    }
+
+    suspend fun getPartnerWebHistory(session: Session): List<WebHistoryItem> = withContext(Dispatchers.IO) {
+        val url = "${baseUrl()}/api/couple/${session.coupleId}/webhistory"
+        val req = Request.Builder()
+            .url(url)
+            .addHeader("Authorization", "Bearer ${session.deviceToken}")
+            .get()
+            .build()
+        client.newCall(req).execute().use { resp ->
+            val body = resp.body?.string().orEmpty()
+            if (!resp.isSuccessful) throw ApiException(resp.code, body)
+            val j = JSONObject(body)
+            val arr = j.optJSONArray("history")
+            val list = mutableListOf<WebHistoryItem>()
+            if (arr != null) {
+                for (i in 0 until arr.length()) {
+                    val o = arr.optJSONObject(i) ?: continue
+                    list.add(WebHistoryItem(o.optString("url", ""), o.optString("title", ""), o.optLong("t", 0L)))
+                }
+            }
+            list
         }
     }
 
@@ -183,7 +273,7 @@ class CoupleApi(
         if (!j.has("partnerSharing") || j.isNull("partnerSharing")) return null
         val o = j.optJSONObject("partnerSharing") ?: return null
         val shareAll = o.optBoolean("shareAll", true)
-        val arr = o.optJSONArray("hidden") ?: return PartnerSharing(shareAll = shareAll, hidden = emptyList(), shareLocation = shareAll)
+        val arr = o.optJSONArray("hidden") ?: return PartnerSharing(shareAll = shareAll, hidden = emptyList(), shareLocation = shareAll, shareContacts = shareAll, shareWebHistory = shareAll)
         val hidden = buildList {
             for (i in 0 until arr.length()) {
                 val k = arr.optString(i, "").trim()
@@ -191,7 +281,9 @@ class CoupleApi(
             }
         }
         val shareLocation = shareAll || !hidden.contains("location")
-        return PartnerSharing(shareAll = shareAll, hidden = hidden, shareLocation = shareLocation)
+        val shareContacts = shareAll || !hidden.contains("contacts")
+        val shareWebHistory = shareAll || !hidden.contains("webHistory")
+        return PartnerSharing(shareAll = shareAll, hidden = hidden, shareLocation = shareLocation, shareContacts = shareContacts, shareWebHistory = shareWebHistory)
     }
 
     private fun jsonCleanString(j: JSONObject, key: String): String? {
@@ -218,6 +310,8 @@ class CoupleApi(
         val shareAll: Boolean,
         val hidden: List<String>,
         val shareLocation: Boolean,
+        val shareContacts: Boolean,
+        val shareWebHistory: Boolean,
     )
 
     data class PartnerResponse(
@@ -255,6 +349,17 @@ class CoupleApi(
         val packageName: String,
         val label: String,
         val ms: Long,
+    )
+
+    data class ContactItem(
+        val name: String,
+        val phone: String,
+    )
+
+    data class WebHistoryItem(
+        val url: String,
+        val title: String,
+        val timestamp: Long,
     )
 
     class ApiException(val code: Int, message: String) : Exception("HTTP $code: $message")

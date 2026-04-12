@@ -107,7 +107,7 @@ fun DashboardScreen(
     val scope = rememberCoroutineScope()
     val snack = remember { SnackbarHostState() }
     val repo = remember { SessionRepository(appContext) }
-    val consentFlow = repo.consentAcceptedFlow.collectAsState(initial = false)
+    val consentFlow = repo.consentAcceptedFlow.collectAsState(initial = null)
     val consentAccepted by consentFlow
     var showConsent by remember { mutableStateOf(false) }
     var menuOpen by remember { mutableStateOf(false) }
@@ -127,7 +127,7 @@ fun DashboardScreen(
     }
 
     LaunchedEffect(consentAccepted) {
-        if (!consentAccepted) return@LaunchedEffect
+        if (consentAccepted != true) return@LaunchedEffect
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return@LaunchedEffect
         if (NotificationPermission.hasPostNotifications(context)) {
             permissionPrefs.setNotificationsAutoPromptCompleted(true)
@@ -144,7 +144,6 @@ fun DashboardScreen(
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
                 resumeVersion++
-                TelemetryWorkScheduler.enqueueImmediate(appContext)
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -152,7 +151,11 @@ fun DashboardScreen(
     }
 
     LaunchedEffect(consentAccepted) {
-        showConsent = !consentAccepted
+        if (consentAccepted == false) {
+            showConsent = true
+        } else if (consentAccepted == true) {
+            showConsent = false
+        }
     }
 
     val a11yEnabled = remember(resumeVersion) {
@@ -166,7 +169,7 @@ fun DashboardScreen(
     }
 
     LaunchedEffect(consentAccepted, resumeVersion, a11yEnabled, usageEnabled) {
-        if (!consentAccepted) {
+        if (consentAccepted != true) {
             showA11yDialog = false
             showUsageDialog = false
             return@LaunchedEffect
@@ -201,15 +204,6 @@ fun DashboardScreen(
         }
     }
 
-    LaunchedEffect(Unit) {
-        lifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
-            while (isActive) {
-                viewModel.uploadAndRefresh()
-                delay(30_000)
-            }
-        }
-    }
-
     if (showConsent) {
         AlertDialog(
             onDismissRequest = { },
@@ -241,7 +235,7 @@ fun DashboardScreen(
         )
     }
 
-    if (consentAccepted && showA11yDialog && !a11yEnabled) {
+    if (consentAccepted == true && showA11yDialog && !a11yEnabled) {
         AlertDialog(
             onDismissRequest = { showA11yDialog = false },
             title = { Text(stringResource(R.string.dialog_a11y_title)) },
@@ -262,7 +256,7 @@ fun DashboardScreen(
         )
     }
 
-    if (consentAccepted && showUsageDialog && !usageEnabled && a11yEnabled) {
+    if (consentAccepted == true && showUsageDialog && !usageEnabled) {
         AlertDialog(
             onDismissRequest = { showUsageDialog = false },
             title = { Text(stringResource(R.string.dialog_usage_title)) },
