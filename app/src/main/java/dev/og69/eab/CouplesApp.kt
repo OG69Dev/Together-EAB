@@ -21,11 +21,6 @@ class CouplesApp : Application() {
         UpdateNotifier.ensureChannel(this)
         TelemetryWorkScheduler.schedulePeriodic(this)
         UpdateWorkScheduler.schedulePeriodic(this)
-        appScope.launch(Dispatchers.IO) {
-            val session = SessionRepository(this@CouplesApp).getSession()
-            if (session != null) {
-                dev.og69.eab.network.WebSocketService.start(this@CouplesApp, session)
-            }
-        }
+
     }
 }

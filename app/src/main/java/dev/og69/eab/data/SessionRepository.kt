@@ -31,6 +31,7 @@ class SessionRepository(context: Context) {
         val profileShareStorage = booleanPreferencesKey("profile_share_storage")
         val profileShareCurrentApp = booleanPreferencesKey("profile_share_current_app")
         val profileShareUsage = booleanPreferencesKey("profile_share_usage")
+        val profileShareLocation = booleanPreferencesKey("profile_share_location")
         val cachedPartnerJson = stringPreferencesKey("cached_partner_json")
     }
 
@@ -61,6 +62,7 @@ class SessionRepository(context: Context) {
             shareStorage = prefs[Keys.profileShareStorage] == true,
             shareCurrentApp = prefs[Keys.profileShareCurrentApp] == true,
             shareUsage = prefs[Keys.profileShareUsage] == true,
+            shareLocation = prefs[Keys.profileShareLocation] == true,
         )
     }
 
@@ -87,6 +89,7 @@ class SessionRepository(context: Context) {
         shareStorage: Boolean,
         shareCurrentApp: Boolean,
         shareUsage: Boolean,
+        shareLocation: Boolean,
         markCompleted: Boolean,
     ) {
         ds.edit { prefs ->
@@ -96,6 +99,7 @@ class SessionRepository(context: Context) {
             prefs[Keys.profileShareStorage] = shareStorage
             prefs[Keys.profileShareCurrentApp] = shareCurrentApp
             prefs[Keys.profileShareUsage] = shareUsage
+            prefs[Keys.profileShareLocation] = shareLocation
             if (markCompleted) {
                 prefs[Keys.profileCompleted] = true
             }
@@ -117,5 +121,6 @@ class SessionRepository(context: Context) {
         val shareStorage: Boolean,
         val shareCurrentApp: Boolean,
         val shareUsage: Boolean,
+        val shareLocation: Boolean,
     )
 }

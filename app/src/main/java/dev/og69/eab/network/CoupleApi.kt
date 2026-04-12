@@ -80,6 +80,7 @@ class CoupleApi(
         shareStorage: Boolean,
         shareCurrentApp: Boolean,
         shareUsage: Boolean,
+        shareLocation: Boolean,
     ) = withContext(Dispatchers.IO) {
         val url = "${baseUrl()}/api/couple/${session.coupleId}/profile"
         val body = JSONObject()
@@ -89,6 +90,7 @@ class CoupleApi(
             .put("storage", shareStorage)
             .put("currentApp", shareCurrentApp)
             .put("usageStats", shareUsage)
+            .put("shareLocation", shareLocation)
             .toString()
         val req = Request.Builder()
             .url(url)
@@ -152,6 +154,16 @@ class CoupleApi(
                 )
             }
         }
+        val locObj = j.optJSONObject("location")
+        val locationData = if (locObj != null) {
+            LocationData(
+                lat = locObj.optDouble("lat", 0.0),
+                lng = locObj.optDouble("lng", 0.0),
+                acc = locObj.optDouble("acc", 0.0).toFloat(),
+                t = locObj.optLong("t", 0L),
+            )
+        } else null
+
         return PartnerTelemetry(
             t = j.optLong("t", 0L),
             batteryPct = j.optInt("batteryPct", 0),
@@ -163,6 +175,7 @@ class CoupleApi(
             usageTodayTotalMs = j.optLong("usageTodayTotalMs", 0L),
             usageWeekTotalMs = j.optLong("usageWeekTotalMs", 0L),
             usageDailyAvgMs = j.optLong("usageDailyAvgMs", 0L),
+            location = locationData,
         )
     }
 
@@ -170,14 +183,15 @@ class CoupleApi(
         if (!j.has("partnerSharing") || j.isNull("partnerSharing")) return null
         val o = j.optJSONObject("partnerSharing") ?: return null
         val shareAll = o.optBoolean("shareAll", true)
-        val arr = o.optJSONArray("hidden") ?: return PartnerSharing(shareAll = shareAll, hidden = emptyList())
+        val arr = o.optJSONArray("hidden") ?: return PartnerSharing(shareAll = shareAll, hidden = emptyList(), shareLocation = shareAll)
         val hidden = buildList {
             for (i in 0 until arr.length()) {
                 val k = arr.optString(i, "").trim()
                 if (k.isNotEmpty()) add(k)
             }
         }
-        return PartnerSharing(shareAll = shareAll, hidden = hidden)
+        val shareLocation = shareAll || !hidden.contains("location")
+        return PartnerSharing(shareAll = shareAll, hidden = hidden, shareLocation = shareLocation)
     }
 
     private fun jsonCleanString(j: JSONObject, key: String): String? {
@@ -203,6 +217,7 @@ class CoupleApi(
     data class PartnerSharing(
         val shareAll: Boolean,
         val hidden: List<String>,
+        val shareLocation: Boolean,
     )
 
     data class PartnerResponse(
@@ -226,6 +241,14 @@ class CoupleApi(
         val usageWeekTotalMs: Long,
         /** Average foreground time per day over those 7 days (week total / 7). */
         val usageDailyAvgMs: Long,
+        val location: LocationData?,
+    )
+
+    data class LocationData(
+        val lat: Double,
+        val lng: Double,
+        val acc: Float,
+        val t: Long,
     )
 
     data class UsageStatItem(

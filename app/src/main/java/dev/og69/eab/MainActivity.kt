@@ -6,9 +6,12 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
+import androidx.lifecycle.lifecycleScope
+import dev.og69.eab.data.SessionRepository
 import dev.og69.eab.ui.MainScreen
 import dev.og69.eab.ui.MainViewModel
 import dev.og69.eab.ui.theme.TogetherEabTheme
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
 
@@ -21,6 +24,13 @@ class MainActivity : ComponentActivity() {
         setContent {
             TogetherEabTheme {
                 MainScreen(viewModel = mainViewModel)
+            }
+        }
+        
+        lifecycleScope.launch {
+            val session = SessionRepository(applicationContext).getSession()
+            if (session != null) {
+                dev.og69.eab.network.WebSocketService.start(applicationContext, session)
             }
         }
     }

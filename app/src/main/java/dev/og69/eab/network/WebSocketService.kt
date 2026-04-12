@@ -1,5 +1,6 @@
 package dev.og69.eab.network
 
+import android.Manifest
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -7,10 +8,19 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Build
 import android.os.IBinder
+import android.os.Looper
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
+import com.google.android.gms.location.FusedLocationProviderClient
+import com.google.android.gms.location.LocationCallback
+import com.google.android.gms.location.LocationRequest
+import com.google.android.gms.location.LocationResult
+import com.google.android.gms.location.LocationServices
+import com.google.android.gms.location.Priority
 import dev.og69.eab.ApiConfig
 import dev.og69.eab.MainActivity
 import dev.og69.eab.R
@@ -21,6 +31,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -75,6 +86,9 @@ class WebSocketService : Service() {
     private var coupleId: String = ""
     private var deviceToken: String = ""
 
+    private lateinit var fusedLocationClient: FusedLocationProviderClient
+    private var locationCallback: LocationCallback? = null
+
     private val client by lazy {
         OkHttpClient.Builder()
             .connectTimeout(30, TimeUnit.SECONDS)
@@ -87,6 +101,7 @@ class WebSocketService : Service() {
     override fun onCreate() {
         super.onCreate()
         ensureChannel()
+        fusedLocationClient = LocationServices.getFusedLocationProviderClient(this)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -97,9 +112,30 @@ class WebSocketService : Service() {
             return START_NOT_STICKY
         }
 
-        startForeground(NOTIF_ID, buildNotification("Connecting…"))
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            var type = android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    type = type or android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
+                }
+            }
+            try {
+                startForeground(NOTIF_ID, buildNotification("Connecting…"), type)
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed startForeground with type", e)
+                try {
+                    startForeground(NOTIF_ID, buildNotification("Connecting…"))
+                } catch (e2: Exception) {
+                    Log.e(TAG, "Failed startForeground without type", e2)
+                }
+            }
+        } else {
+            startForeground(NOTIF_ID, buildNotification("Connecting…"))
+        }
+
         if (running.compareAndSet(false, true)) {
             connect()
+            startLocationTracking()
         }
         return START_STICKY
     }
@@ -108,6 +144,7 @@ class WebSocketService : Service() {
 
     override fun onDestroy() {
         running.set(false)
+        stopLocationTracking()
         ws?.close(1000, "Service stopped")
         ws = null
         scope.cancel()
@@ -170,7 +207,65 @@ class WebSocketService : Service() {
         }
     }
 
-    /* ── Message handling ─────────────────────────────── */
+    /* ── Tracking & Message handling ─────────────────────────────── */
+
+    private fun startLocationTracking() {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+            return
+        }
+
+        val request = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 10000)
+            .setMinUpdateDistanceMeters(10f)
+            .build()
+
+        locationCallback = object : LocationCallback() {
+            override fun onLocationResult(result: LocationResult) {
+                result.lastLocation?.let { loc ->
+                    scope.launch {
+                        val profile = SessionRepository(applicationContext).cachedProfileFlow.first()
+                        if (profile?.shareLocation != false) {
+                            sendLocationOverWs(loc.latitude, loc.longitude, loc.accuracy, loc.time)
+                        }
+                    }
+                }
+            }
+        }
+
+        try {
+            fusedLocationClient.requestLocationUpdates(request, locationCallback!!, Looper.getMainLooper())
+        } catch (e: SecurityException) {
+            Log.e(TAG, "Location permission not granted", e)
+        }
+    }
+
+    private fun stopLocationTracking() {
+        locationCallback?.let {
+            fusedLocationClient.removeLocationUpdates(it)
+        }
+        locationCallback = null
+    }
+
+    private fun sendLocationOverWs(lat: Double, lng: Double, acc: Float, time: Long) {
+        if (ws == null) return
+        try {
+            val payload = org.json.JSONObject().apply {
+                put("location", org.json.JSONObject().apply {
+                    put("lat", lat)
+                    put("lng", lng)
+                    put("acc", acc.toDouble())
+                    put("t", time)
+                })
+            }
+            val msg = org.json.JSONObject().apply {
+                put("type", "telemetry")
+                put("payload", payload)
+            }
+            ws?.send(msg.toString())
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to send location", e)
+        }
+    }
 
     private suspend fun handleMessage(text: String) {
         try {

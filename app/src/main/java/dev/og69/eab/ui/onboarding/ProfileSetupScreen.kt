@@ -54,6 +54,7 @@ fun ProfileSetupScreen(
     var shareStorage by remember { mutableStateOf(true) }
     var shareCurrentApp by remember { mutableStateOf(true) }
     var shareUsage by remember { mutableStateOf(true) }
+    var shareLocation by remember { mutableStateOf(true) }
     var busy by remember { mutableStateOf(false) }
     var err by remember { mutableStateOf<String?>(null) }
 
@@ -66,6 +67,7 @@ fun ProfileSetupScreen(
             shareStorage = cached.shareStorage
             shareCurrentApp = cached.shareCurrentApp
             shareUsage = cached.shareUsage
+            shareLocation = cached.shareLocation
         }
     }
 
@@ -143,6 +145,11 @@ fun ProfileSetupScreen(
                 checked = shareUsage,
                 onCheckedChange = { shareUsage = it },
             )
+            ShareRow(
+                label = "Share Live Location",
+                checked = shareLocation,
+                onCheckedChange = { shareLocation = it },
+            )
         }
 
         err?.let {
@@ -176,6 +183,7 @@ fun ProfileSetupScreen(
                     val stor = all || shareStorage
                     val cur = all || shareCurrentApp
                     val use = all || shareUsage
+                    val loc = all || shareLocation
                     runCatching {
                         api.postProfile(
                             session = session,
@@ -185,6 +193,7 @@ fun ProfileSetupScreen(
                             shareStorage = stor,
                             shareCurrentApp = cur,
                             shareUsage = use,
+                            shareLocation = loc,
                         )
                     }
                         .onSuccess {
@@ -195,6 +204,7 @@ fun ProfileSetupScreen(
                                 shareStorage = stor,
                                 shareCurrentApp = cur,
                                 shareUsage = use,
+                                shareLocation = loc,
                                 markCompleted = true,
                             )
                             onSaved()

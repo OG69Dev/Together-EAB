@@ -12,7 +12,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import dev.og69.eab.data.SessionRepository
-import dev.og69.eab.ui.dashboard.DashboardScreen
+import dev.og69.eab.ui.dashboard.MainHostScreen
 import dev.og69.eab.ui.onboarding.OnboardingScreen
 import dev.og69.eab.ui.onboarding.ProfileSetupScreen
 
@@ -79,7 +79,7 @@ fun AppNav(modifier: Modifier = Modifier) {
             )
         }
         composable("dashboard") {
-            DashboardScreen(
+            MainHostScreen(
                 onSignOut = {
                     nav.navigate("onboarding") {
                         popUpTo("dashboard") { inclusive = true }
