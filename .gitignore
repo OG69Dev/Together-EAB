@@ -1,0 +1,11 @@
+.gradle/
+build/
+app/
+**/build/
+*.iml
+.idea/
+.kotlin/
+.DS_Store
+*.apk
+*.aab
+Cloudflare worker/
