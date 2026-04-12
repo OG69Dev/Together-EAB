@@ -62,7 +62,7 @@ class SessionRepository(context: Context) {
             shareStorage = prefs[Keys.profileShareStorage] == true,
             shareCurrentApp = prefs[Keys.profileShareCurrentApp] == true,
             shareUsage = prefs[Keys.profileShareUsage] == true,
-            shareLocation = prefs[Keys.profileShareLocation] == true,
+            shareLocation = prefs[Keys.profileShareLocation] != false,
         )
     }
 

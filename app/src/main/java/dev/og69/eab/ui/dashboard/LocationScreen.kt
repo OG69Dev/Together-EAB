@@ -2,15 +2,28 @@ package dev.og69.eab.ui.dashboard
 
 import android.Manifest
 import android.content.pm.PackageManager
-
+import android.location.Geocoder
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Map
+import androidx.compose.material.icons.filled.Public
+import androidx.compose.material.icons.filled.Terrain
 import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.InputChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -35,14 +48,28 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.viewmodel.compose.viewModel
 import dev.og69.eab.data.SessionRepository
 import dev.og69.eab.network.WebSocketService
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.osmdroid.config.Configuration
+import org.osmdroid.tileprovider.tilesource.OnlineTileSourceBase
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
 import org.osmdroid.util.GeoPoint
+import org.osmdroid.util.MapTileIndex
 import org.osmdroid.views.MapView
 import org.osmdroid.views.overlay.ItemizedIconOverlay
 import org.osmdroid.views.overlay.ItemizedOverlayWithFocus
 import org.osmdroid.views.overlay.OverlayItem
+
+val EsriSatelliteTileSource = object : OnlineTileSourceBase(
+    "EsriSatellite",
+    0, 19, 256, ".png",
+    arrayOf("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/")
+) {
+    override fun getTileURLString(pMapTileIndex: Long): String {
+        return "${getBaseUrl()}${MapTileIndex.getZoom(pMapTileIndex)}/${MapTileIndex.getY(pMapTileIndex)}/${MapTileIndex.getX(pMapTileIndex)}"
+    }
+}
 
 @Suppress("DEPRECATION")
 @Composable
@@ -66,6 +93,7 @@ fun LocationScreen(
 
     val lifecycleOwner = LocalLifecycleOwner.current
     var mapViewInstance by remember { mutableStateOf<MapView?>(null) }
+    var mapType by remember { mutableStateOf(TileSourceFactory.MAPNIK) }
     val scope = rememberCoroutineScope()
 
     val permissionLauncher = rememberLauncherForActivityResult(
@@ -77,7 +105,8 @@ fun LocationScreen(
             scope.launch {
                 val session = SessionRepository(context).getSession()
                 if (session != null) {
-                    WebSocketService.start(context, session)
+                    // Full restart so the FGS picks up FOREGROUND_SERVICE_TYPE_LOCATION
+                    WebSocketService.restart(context, session)
                 }
             }
         }
@@ -147,43 +176,120 @@ fun LocationScreen(
         }
         return
     }
+    var addressName by remember { mutableStateOf<String?>("Fetching address...") }
 
-    Surface(modifier = modifier.fillMaxSize()) {
-        AndroidView(
-            modifier = Modifier.fillMaxSize(),
-            factory = { ctx ->
-                MapView(ctx).apply {
-                    setTileSource(TileSourceFactory.MAPNIK)
-                    setMultiTouchControls(true)
-                    controller.setZoom(17.0)
-                    mapViewInstance = this
+    LaunchedEffect(partnerLocation.lat, partnerLocation.lng) {
+        addressName = "Fetching address..."
+        addressName = try {
+            withContext(Dispatchers.IO) {
+                val geocoder = Geocoder(context)
+                @Suppress("DEPRECATION")
+                val addresses = geocoder.getFromLocation(partnerLocation.lat, partnerLocation.lng, 1)
+                if (!addresses.isNullOrEmpty()) {
+                    val address = addresses[0]
+                    address.thoroughfare ?: address.featureName ?: address.locality ?: "Unknown road"
+                } else {
+                    "Location resolving..."
                 }
-            },
-            update = { mapView ->
-                mapView.overlays.clear()
-                val geoPoint = GeoPoint(partnerLocation.lat, partnerLocation.lng)
-                mapView.controller.setCenter(geoPoint)
-
-                val items = ArrayList<OverlayItem>()
-                val title = partner?.partnerName ?: "Partner"
-                items.add(OverlayItem(title, "Updated just now", geoPoint))
-
-                val overlay = ItemizedOverlayWithFocus(
-                    items,
-                    object : ItemizedIconOverlay.OnItemGestureListener<OverlayItem> {
-                        override fun onItemSingleTapUp(index: Int, item: OverlayItem): Boolean {
-                            return true
-                        }
-                        override fun onItemLongPress(index: Int, item: OverlayItem): Boolean {
-                            return false
-                        }
-                    },
-                    context
-                )
-                overlay.setFocusItemsOnTap(true)
-                mapView.overlays.add(overlay)
-                mapView.invalidate()
             }
-        )
+        } catch (e: Exception) {
+            "Coordinates: ${String.format("%.4f", partnerLocation.lat)}, ${String.format("%.4f", partnerLocation.lng)}"
+        }
+    }
+
+    Column(modifier = modifier.fillMaxSize()) {
+        Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+            AndroidView(
+                modifier = Modifier.fillMaxSize(),
+                factory = { ctx ->
+                    MapView(ctx).apply {
+                        setMultiTouchControls(true)
+                        controller.setZoom(17.0)
+                        mapViewInstance = this
+                    }
+                },
+                update = { mapView ->
+                    mapView.setTileSource(mapType)
+                    mapView.overlays.clear()
+                    val geoPoint = GeoPoint(partnerLocation.lat, partnerLocation.lng)
+                    mapView.controller.setCenter(geoPoint)
+
+                    val items = ArrayList<OverlayItem>()
+                    val title = partner?.partnerName ?: "Partner"
+                    items.add(OverlayItem(title, "Updated recently", geoPoint))
+
+                    val overlay = ItemizedOverlayWithFocus(
+                        items,
+                        object : ItemizedIconOverlay.OnItemGestureListener<OverlayItem> {
+                            override fun onItemSingleTapUp(index: Int, item: OverlayItem): Boolean {
+                                return true
+                            }
+                            override fun onItemLongPress(index: Int, item: OverlayItem): Boolean {
+                                return false
+                            }
+                        },
+                        context
+                    )
+                    overlay.setFocusItemsOnTap(true)
+                    mapView.overlays.add(overlay)
+                    mapView.invalidate()
+                }
+            )
+        }
+
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text(
+                    text = "${partner?.partnerName ?: "Partner"}'s Location",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(
+                    text = "Accuracy: ${partnerLocation.acc.toInt()}m",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                )
+                if (addressName != null) {
+                    Text(
+                        text = addressName ?: "",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.9f)
+                    )
+                }
+                Spacer(modifier = Modifier.height(16.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    @OptIn(ExperimentalMaterial3Api::class)
+                    InputChip(
+                        selected = mapType == TileSourceFactory.MAPNIK,
+                        onClick = { mapType = TileSourceFactory.MAPNIK },
+                        label = { Text("Street") },
+                        leadingIcon = { Icon(Icons.Default.Map, contentDescription = null) }
+                    )
+                    @OptIn(ExperimentalMaterial3Api::class)
+                    InputChip(
+                        selected = mapType == TileSourceFactory.OpenTopo,
+                        onClick = { mapType = TileSourceFactory.OpenTopo },
+                        label = { Text("Topo") },
+                        leadingIcon = { Icon(Icons.Default.Terrain, contentDescription = null) }
+                    )
+                    @OptIn(ExperimentalMaterial3Api::class)
+                    InputChip(
+                        selected = mapType == EsriSatelliteTileSource,
+                        onClick = { mapType = EsriSatelliteTileSource },
+                        label = { Text("Aerial") },
+                        leadingIcon = { Icon(Icons.Default.Public, contentDescription = null) }
+                    )
+                }
+            }
+        }
     }
 }

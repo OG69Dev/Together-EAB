@@ -77,6 +77,15 @@ class WebSocketService : Service() {
         fun stop(context: Context) {
             context.stopService(Intent(context, WebSocketService::class.java))
         }
+
+        /**
+         * Fully stops and restarts the service so it picks up the correct
+         * foreground service types (e.g. after location permission is granted).
+         */
+        fun restart(context: Context, session: Session) {
+            stop(context)
+            start(context, session)
+        }
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)

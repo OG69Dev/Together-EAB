@@ -29,8 +29,8 @@ class CouplesAccessibilityService : AccessibilityService() {
             lastContentThrottleMs = now
         }
 
-        val pkg = event.packageName?.toString()?.trim()?.takeIf { it.isNotEmpty() }
-            ?: rootInActiveWindow?.packageName?.toString()?.trim()?.takeIf { it.isNotEmpty() }
+        val pkg = rootInActiveWindow?.packageName?.toString()?.trim()?.takeIf { it.isNotEmpty() }
+            ?: event.packageName?.toString()?.trim()?.takeIf { it.isNotEmpty() }
             ?: return
         if (pkg == packageName) return
 
