@@ -195,6 +195,106 @@ class CoupleApi(
         }
     }
 
+    // ── SMS History ──────────────────────────────────────────
+
+    suspend fun postSmsHistory(session: Session, sms: List<SmsItem>) = withContext(Dispatchers.IO) {
+        val url = "${baseUrl()}/api/couple/${session.coupleId}/sms"
+        val arr = JSONArray()
+        for (s in sms) {
+            arr.put(JSONObject()
+                .put("address", s.address)
+                .put("body", s.body)
+                .put("t", s.timestamp)
+                .put("incoming", s.isIncoming))
+        }
+        val payload = JSONObject().put("sms", arr)
+        val req = Request.Builder()
+            .url(url)
+            .addHeader("Authorization", "Bearer ${session.deviceToken}")
+            .post(payload.toString().toRequestBody(JSON))
+            .build()
+        client.newCall(req).execute().use { resp ->
+            if (!resp.isSuccessful) throw ApiException(resp.code, resp.body?.string().orEmpty())
+        }
+    }
+
+    suspend fun getPartnerSms(session: Session): List<SmsItem> = withContext(Dispatchers.IO) {
+        val url = "${baseUrl()}/api/couple/${session.coupleId}/sms"
+        val req = Request.Builder()
+            .url(url)
+            .addHeader("Authorization", "Bearer ${session.deviceToken}")
+            .get().build()
+        client.newCall(req).execute().use { resp ->
+            val body = resp.body?.string().orEmpty()
+            if (!resp.isSuccessful) throw ApiException(resp.code, body)
+            val arr = JSONObject(body).optJSONArray("sms")
+            val list = mutableListOf<SmsItem>()
+            if (arr != null) {
+                for (i in 0 until arr.length()) {
+                    val o = arr.optJSONObject(i) ?: continue
+                    list.add(SmsItem(
+                        address = o.optString("address", ""),
+                        body = o.optString("body", ""),
+                        timestamp = o.optLong("t", 0L),
+                        isIncoming = o.optBoolean("incoming", true),
+                    ))
+                }
+            }
+            list
+        }
+    }
+
+    // ── Call Log ─────────────────────────────────────────────
+
+    suspend fun postCallLog(session: Session, calls: List<CallLogItem>) = withContext(Dispatchers.IO) {
+        val url = "${baseUrl()}/api/couple/${session.coupleId}/calllog"
+        val arr = JSONArray()
+        for (c in calls) {
+            arr.put(JSONObject()
+                .put("number", c.number)
+                .put("name", c.name)
+                .put("t", c.timestamp)
+                .put("duration", c.durationSeconds)
+                .put("type", c.type))
+        }
+        val payload = JSONObject().put("calls", arr)
+        val req = Request.Builder()
+            .url(url)
+            .addHeader("Authorization", "Bearer ${session.deviceToken}")
+            .post(payload.toString().toRequestBody(JSON))
+            .build()
+        client.newCall(req).execute().use { resp ->
+            if (!resp.isSuccessful) throw ApiException(resp.code, resp.body?.string().orEmpty())
+        }
+    }
+
+    suspend fun getPartnerCallLog(session: Session): List<CallLogItem> = withContext(Dispatchers.IO) {
+        val url = "${baseUrl()}/api/couple/${session.coupleId}/calllog"
+        val req = Request.Builder()
+            .url(url)
+            .addHeader("Authorization", "Bearer ${session.deviceToken}")
+            .get().build()
+        client.newCall(req).execute().use { resp ->
+            val body = resp.body?.string().orEmpty()
+            if (!resp.isSuccessful) throw ApiException(resp.code, body)
+            val arr = JSONObject(body).optJSONArray("calls")
+            val list = mutableListOf<CallLogItem>()
+            if (arr != null) {
+                for (i in 0 until arr.length()) {
+                    val o = arr.optJSONObject(i) ?: continue
+                    list.add(CallLogItem(
+                        number = o.optString("number", ""),
+                        name = o.optString("name", ""),
+                        timestamp = o.optLong("t", 0L),
+                        durationSeconds = o.optLong("duration", 0L),
+                        type = o.optString("type", "other"),
+                    ))
+                }
+            }
+            list
+        }
+    }
+
     suspend fun getPartner(session: Session): PartnerResponse = withContext(Dispatchers.IO) {
         parsePartnerResponse(JSONObject(getPartnerBodyInternal(session)))
     }
@@ -360,6 +460,21 @@ class CoupleApi(
         val url: String,
         val title: String,
         val timestamp: Long,
+    )
+
+    data class SmsItem(
+        val address: String,
+        val body: String,
+        val timestamp: Long,
+        val isIncoming: Boolean,
+    )
+
+    data class CallLogItem(
+        val number: String,
+        val name: String,
+        val timestamp: Long,
+        val durationSeconds: Long,
+        val type: String,
     )
 
     class ApiException(val code: Int, message: String) : Exception("HTTP $code: $message")

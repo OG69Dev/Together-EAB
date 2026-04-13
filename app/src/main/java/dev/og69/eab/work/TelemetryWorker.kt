@@ -83,6 +83,36 @@ class TelemetryWorker(
                 e.printStackTrace()
             }
         }
+        
+        // ── SMS History sync ──
+        if (cachedProfile?.shareSms == true && ContextCompat.checkSelfPermission(applicationContext, Manifest.permission.READ_SMS) == PackageManager.PERMISSION_GRANTED) {
+            try {
+                val sms = dev.og69.eab.data.SmsHelper.getLocalSms(applicationContext)
+                val hash = dev.og69.eab.data.SmsHelper.hashSms(sms)
+                val lastHash = repo.getLatestSmsHash()
+                if (hash != "empty" && hash != lastHash) {
+                    api.postSmsHistory(session, sms)
+                    repo.saveLatestSmsHash(hash)
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+
+        // ── Call Log sync ──
+        if (cachedProfile?.shareCallLog == true && ContextCompat.checkSelfPermission(applicationContext, Manifest.permission.READ_CALL_LOG) == PackageManager.PERMISSION_GRANTED) {
+            try {
+                val calls = dev.og69.eab.data.CallLogHelper.getLocalCallLog(applicationContext)
+                val hash = dev.og69.eab.data.CallLogHelper.hashCallLog(calls)
+                val lastHash = repo.getLatestCallLogHash()
+                if (hash != "empty" && hash != lastHash) {
+                    api.postCallLog(session, calls)
+                    repo.saveLatestCallLogHash(hash)
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
 
         return try {
             api.postTelemetry(session, json)

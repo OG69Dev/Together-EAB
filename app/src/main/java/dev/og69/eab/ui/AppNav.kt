@@ -17,6 +17,11 @@ import dev.og69.eab.ui.onboarding.OnboardingScreen
 import dev.og69.eab.ui.onboarding.ProfileSetupScreen
 import dev.og69.eab.ui.dashboard.ContactsScreen
 import dev.og69.eab.ui.dashboard.WebHistoryScreen
+import dev.og69.eab.ui.dashboard.SmsHistoryScreen
+import dev.og69.eab.ui.dashboard.SmsConversationScreen
+import dev.og69.eab.ui.dashboard.CallLogScreen
+import java.net.URLDecoder
+import java.net.URLEncoder
 
 @Composable
 fun AppNav(modifier: Modifier = Modifier) {
@@ -96,6 +101,12 @@ fun AppNav(modifier: Modifier = Modifier) {
                 onNavigateToWebHistory = {
                     nav.navigate("web_history")
                 },
+                onNavigateToSmsHistory = {
+                    nav.navigate("sms_history")
+                },
+                onNavigateToCallLog = {
+                    nav.navigate("call_log")
+                },
             )
         }
         composable("contacts") {
@@ -104,9 +115,26 @@ fun AppNav(modifier: Modifier = Modifier) {
             )
         }
         composable("web_history") {
-            WebHistoryScreen(
-                onBack = { nav.popBackStack() }
+            WebHistoryScreen(onBack = { nav.popBackStack() })
+        }
+        composable("sms_history") {
+            SmsHistoryScreen(
+                onBack = { nav.popBackStack() },
+                onOpenConversation = { contactName ->
+                    nav.navigate("sms_conversation/${URLEncoder.encode(contactName, "UTF-8")}")
+                },
             )
+        }
+        composable("sms_conversation/{contact}") { backStackEntry ->
+            val encoded = backStackEntry.arguments?.getString("contact") ?: ""
+            val contactName = URLDecoder.decode(encoded, "UTF-8")
+            SmsConversationScreen(
+                contactName = contactName,
+                onBack = { nav.popBackStack() },
+            )
+        }
+        composable("call_log") {
+            CallLogScreen(onBack = { nav.popBackStack() })
         }
     }
 }
