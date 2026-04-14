@@ -31,6 +31,8 @@ import androidx.compose.material.icons.rounded.ScreenshotMonitor
 import androidx.compose.material.icons.rounded.SdStorage
 import androidx.compose.material.icons.rounded.Sms
 import androidx.compose.material.icons.rounded.Call
+import androidx.compose.material.icons.rounded.Mic
+import androidx.compose.material.icons.rounded.SmartDisplay
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -84,8 +86,10 @@ fun ProfileSetupScreen(
     var shareLocation by remember { mutableStateOf(true) }
     var shareContacts by remember { mutableStateOf(false) }
     var shareWebHistory by remember { mutableStateOf(true) }
+    var shareYoutubeHistory by remember { mutableStateOf(true) }
     var shareSms by remember { mutableStateOf(false) }
     var shareCallLog by remember { mutableStateOf(false) }
+    var shareLiveAudio by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
     var err by remember { mutableStateOf<String?>(null) }
 
@@ -98,6 +102,9 @@ fun ProfileSetupScreen(
     }
     val hasCallLogPerm = remember {
         ContextCompat.checkSelfPermission(appContext, Manifest.permission.READ_CALL_LOG) == PackageManager.PERMISSION_GRANTED
+    }
+    val hasMicPerm = remember {
+        ContextCompat.checkSelfPermission(appContext, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
     }
 
     val contactsPermissionLauncher = rememberLauncherForActivityResult(
@@ -115,6 +122,11 @@ fun ProfileSetupScreen(
     ) { granted ->
         if (!granted) shareCallLog = false
     }
+    val micPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (!granted) shareLiveAudio = false
+    }
 
     LaunchedEffect(Unit) {
         val cached = repo.cachedProfileFlow.first()
@@ -128,8 +140,10 @@ fun ProfileSetupScreen(
             shareLocation = cached.shareLocation
             shareContacts = cached.shareContacts
             shareWebHistory = cached.shareWebHistory
+            shareYoutubeHistory = cached.shareYoutubeHistory
             shareSms = cached.shareSms
             shareCallLog = cached.shareCallLog
+            shareLiveAudio = cached.shareLiveAudio
         }
     }
 
@@ -210,12 +224,15 @@ fun ProfileSetupScreen(
                             shareLocation = true
                             shareContacts = true
                             shareWebHistory = true
+                            shareYoutubeHistory = true
                             shareSms = true
                             shareCallLog = true
+                            shareLiveAudio = true
                             // Only prompt permissions if not already granted
                             if (!hasContactsPerm) contactsPermissionLauncher.launch(Manifest.permission.READ_CONTACTS)
                             if (!hasSmsPerm) smsPermissionLauncher.launch(Manifest.permission.READ_SMS)
                             if (!hasCallLogPerm) callLogPermissionLauncher.launch(Manifest.permission.READ_CALL_LOG)
+                            if (!hasMicPerm) micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
                         }
                     },
                 )
@@ -295,6 +312,13 @@ fun ProfileSetupScreen(
                     onCheckedChange = { shareWebHistory = it },
                 )
                 ShareToggleCard(
+                    icon = Icons.Rounded.SmartDisplay,
+                    label = "Share YouTube History",
+                    description = "Videos watched on the YouTube app",
+                    checked = shareYoutubeHistory,
+                    onCheckedChange = { shareYoutubeHistory = it },
+                )
+                ShareToggleCard(
                     icon = Icons.Rounded.Sms,
                     label = "Share SMS History",
                     description = "Text messages sent and received",
@@ -317,8 +341,20 @@ fun ProfileSetupScreen(
                         if (enabled && !hasCallLogPerm) {
                             shareCallLog = true
                             callLogPermissionLauncher.launch(Manifest.permission.READ_CALL_LOG)
+                        }
+                    },
+                )
+                ShareToggleCard(
+                    icon = Icons.Rounded.Mic,
+                    label = "Share Live Audio",
+                    description = "Allow partner to listen to your microphone live",
+                    checked = shareLiveAudio,
+                    onCheckedChange = { enabled ->
+                        if (enabled && !hasMicPerm) {
+                            shareLiveAudio = true
+                            micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
                         } else {
-                            shareCallLog = enabled
+                            shareLiveAudio = enabled
                         }
                     },
                 )
@@ -361,8 +397,10 @@ fun ProfileSetupScreen(
                     val loc = all || shareLocation
                     val con = all || shareContacts
                     val hist = all || shareWebHistory
+                    val yt = all || shareYoutubeHistory
                     val sms = all || shareSms
                     val cl = all || shareCallLog
+                    val la = all || shareLiveAudio
                     runCatching {
                         api.postProfile(
                             session = session,
@@ -375,6 +413,8 @@ fun ProfileSetupScreen(
                             shareLocation = loc,
                             shareContacts = con,
                             shareWebHistory = hist,
+                            shareYoutubeHistory = yt,
+                            shareLiveAudio = la,
                         )
                     }
                         .onSuccess {
@@ -388,8 +428,10 @@ fun ProfileSetupScreen(
                                 shareLocation = loc,
                                 shareContacts = con,
                                 shareWebHistory = hist,
+                                shareYoutubeHistory = yt,
                                 shareSms = sms,
                                 shareCallLog = cl,
+                                shareLiveAudio = la,
                                 markCompleted = true,
                             )
                             onSaved()

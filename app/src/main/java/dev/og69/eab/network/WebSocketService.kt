@@ -60,6 +60,26 @@ class WebSocketService : Service() {
         private const val EXTRA_COUPLE_ID = "couple_id"
         private const val EXTRA_DEVICE_TOKEN = "device_token"
 
+        val signalingFlow = kotlinx.coroutines.flow.MutableSharedFlow<org.json.JSONObject>(extraBufferCapacity = 64)
+        val audioStateFlow = kotlinx.coroutines.flow.MutableStateFlow(dev.og69.eab.webrtc.WebRtcManager.State.IDLE)
+
+        private var instance: WebSocketService? = null
+
+        fun requestAudio() {
+            instance?.let { srv ->
+                Log.d(TAG, "Initiating audio listening request")
+                srv.ensureWebRtc()
+                srv.webRtcManager?.start(dev.og69.eab.webrtc.WebRtcManager.Role.LISTENER)
+                srv.sendSignaling(org.json.JSONObject().put("type", "request_audio"))
+            }
+        }
+
+        fun stopAudio() {
+            Log.d(TAG, "Stopping live audio")
+            instance?.stopAudio()
+            instance?.sendSignaling(org.json.JSONObject().put("type", "stop_audio"))
+        }
+
         /** Maximum backoff delay (2 min). */
         private const val MAX_BACKOFF_MS = 120_000L
 
@@ -93,6 +113,7 @@ class WebSocketService : Service() {
     private val running = AtomicBoolean(false)
     private var ws: WebSocket? = null
     private var backoffMs = 1_000L
+    private var webRtcManager: dev.og69.eab.webrtc.WebRtcManager? = null
     private var coupleId: String = ""
     private var deviceToken: String = ""
 
@@ -110,6 +131,7 @@ class WebSocketService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        instance = this
         ensureChannel()
         fusedLocationClient = LocationServices.getFusedLocationProviderClient(this)
     }
@@ -127,6 +149,11 @@ class WebSocketService : Service() {
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                     type = type or android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
+                }
+            }
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    type = type or android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
                 }
             }
             try {
@@ -157,11 +184,16 @@ class WebSocketService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
+        Log.d(TAG, "Service destroying")
         running.set(false)
         stopLocationTracking()
-        ws?.close(1000, "Service stopped")
+        ws?.close(1000, "Service destroyed")
         ws = null
+        stopAudio()
+        webRtcManager?.dispose()
+        webRtcManager = null
         scope.cancel()
+        instance = null
         super.onDestroy()
     }
 
@@ -339,6 +371,33 @@ class WebSocketService : Service() {
         }
     }
 
+    fun sendSignaling(data: org.json.JSONObject) {
+        val socket = ws ?: return
+        try {
+            val msg = org.json.JSONObject().apply {
+                put("type", "signaling")
+                put("payload", data)
+            }
+            socket.send(msg.toString())
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to send signaling message", e)
+        }
+    }
+
+    private fun ensureWebRtc() {
+        if (webRtcManager == null) {
+            webRtcManager = dev.og69.eab.webrtc.WebRtcManager(applicationContext, 
+                onSignalingMessage = { data -> sendSignaling(data) },
+                onStateChange = { state -> audioStateFlow.value = state }
+            )
+        }
+    }
+
+    fun stopAudio() {
+        webRtcManager?.stop()
+        updateNotification("Connected")
+    }
+
     private suspend fun handleMessage(text: String) {
         try {
             val json = org.json.JSONObject(text)
@@ -355,6 +414,34 @@ class WebSocketService : Service() {
                 "partner_disconnected" -> {
                     Log.d(TAG, "Partner disconnected")
                     updateNotification("Connected")
+                }
+                "signaling" -> {
+                    val payload = json.optJSONObject("payload")
+                    if (payload != null) {
+                        val type = payload.optString("type")
+                        if (type == "request_audio") {
+                            val repo = SessionRepository(applicationContext)
+                            val profile = repo.cachedProfileFlow.first()
+                            val hasPermission = ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+                            if (profile?.shareLiveAudio == true && hasPermission) {
+                                Log.d(TAG, "Auto-starting audio streamer")
+                                ensureWebRtc()
+                                webRtcManager?.start(dev.og69.eab.webrtc.WebRtcManager.Role.STREAMER)
+                                updateNotification("Live Audio Stream Active")
+                            } else {
+                                Log.d(TAG, "Ignored request_audio: profile=${profile?.shareLiveAudio}, perm=$hasPermission")
+                                sendSignaling(org.json.JSONObject().apply {
+                                    put("type", "audio_disabled")
+                                    put("reason", if (profile?.shareLiveAudio != true) "disabled_in_profile" else "permission_missing")
+                                })
+                            }
+                        } else if (type == "stop_audio") {
+                            stopAudio()
+                        } else {
+                            webRtcManager?.onRemoteSignalingPayload(payload)
+                        }
+                        signalingFlow.emit(payload)
+                    }
                 }
                 "pong" -> { /* keepalive response */ }
             }

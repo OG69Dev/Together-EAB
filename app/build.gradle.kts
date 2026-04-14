@@ -20,8 +20,8 @@ android {
         applicationId = "dev.og69.eab"
         minSdk = 26
         targetSdk = 36
-        versionCode = 6
-        versionName = "1.0.5"
+        versionCode = 7
+        versionName = "1.0.6"
         val ghOwner = (localProperties.getProperty("github.owner") ?: "").replace("\"", "\\\"")
         val ghRepo = (localProperties.getProperty("github.repo") ?: "").replace("\"", "\\\"")
         val ghToken = (localProperties.getProperty("github.token") ?: "").replace("\"", "\\\"")
@@ -81,6 +81,7 @@ dependencies {
 
     implementation("com.google.android.gms:play-services-location:21.3.0")
     implementation("org.osmdroid:osmdroid-android:6.1.20")
+    implementation("io.github.webrtc-sdk:android:144.7559.01")
 
     /*
      * FCM (push) — add when you have a Firebase project:

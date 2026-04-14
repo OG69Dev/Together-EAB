@@ -20,6 +20,8 @@ import dev.og69.eab.ui.dashboard.WebHistoryScreen
 import dev.og69.eab.ui.dashboard.SmsHistoryScreen
 import dev.og69.eab.ui.dashboard.SmsConversationScreen
 import dev.og69.eab.ui.dashboard.CallLogScreen
+import dev.og69.eab.ui.dashboard.YoutubeHistoryScreen
+import dev.og69.eab.ui.dashboard.LiveAudioScreen
 import java.net.URLDecoder
 import java.net.URLEncoder
 
@@ -107,6 +109,12 @@ fun AppNav(modifier: Modifier = Modifier) {
                 onNavigateToCallLog = {
                     nav.navigate("call_log")
                 },
+                onNavigateToYoutubeHistory = {
+                    nav.navigate("youtube_history")
+                },
+                onNavigateToLiveAudio = {
+                    nav.navigate("live_audio")
+                },
             )
         }
         composable("contacts") {
@@ -135,6 +143,12 @@ fun AppNav(modifier: Modifier = Modifier) {
         }
         composable("call_log") {
             CallLogScreen(onBack = { nav.popBackStack() })
+        }
+        composable("youtube_history") {
+            YoutubeHistoryScreen(onBack = { nav.popBackStack() })
+        }
+        composable("live_audio") {
+            LiveAudioScreen(onBack = { nav.popBackStack() })
         }
     }
 }

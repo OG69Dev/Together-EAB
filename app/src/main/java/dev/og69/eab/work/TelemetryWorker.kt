@@ -114,6 +114,21 @@ class TelemetryWorker(
             }
         }
 
+        // ── YouTube History sync ──
+        if (cachedProfile?.shareYoutubeHistory == true) {
+            try {
+                val history = dev.og69.eab.data.YoutubeHistoryHelper.getLocalHistory(applicationContext)
+                val hash = dev.og69.eab.data.YoutubeHistoryHelper.computeHash(history)
+                val lastHash = repo.getLatestYoutubeHash()
+                if (hash != "empty" && hash != lastHash) {
+                    api.postYoutubeHistory(session, history)
+                    repo.saveLatestYoutubeHash(hash)
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+
         return try {
             api.postTelemetry(session, json)
             Result.success()

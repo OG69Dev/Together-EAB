@@ -15,6 +15,8 @@ import androidx.compose.material.icons.rounded.Call
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.Public
 import androidx.compose.material.icons.rounded.Sms
+import androidx.compose.material.icons.rounded.SmartDisplay
+import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -35,8 +37,10 @@ import androidx.compose.ui.unit.dp
 fun RightEmptyScreen(
     onNavigateToContacts: () -> Unit,
     onNavigateToWebHistory: () -> Unit,
+    onNavigateToYoutubeHistory: () -> Unit,
     onNavigateToSmsHistory: () -> Unit,
     onNavigateToCallLog: () -> Unit,
+    onNavigateToLiveAudio: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     Scaffold(
@@ -62,9 +66,13 @@ fun RightEmptyScreen(
             Spacer(Modifier.height(12.dp))
             MoreMenuItem(icon = Icons.Rounded.Public, label = "Web Control", onClick = onNavigateToWebHistory)
             Spacer(Modifier.height(12.dp))
+            MoreMenuItem(icon = Icons.Rounded.SmartDisplay, label = "YouTube Control", onClick = onNavigateToYoutubeHistory)
+            Spacer(Modifier.height(12.dp))
             MoreMenuItem(icon = Icons.Rounded.Sms, label = "SMS History", onClick = onNavigateToSmsHistory)
             Spacer(Modifier.height(12.dp))
             MoreMenuItem(icon = Icons.Rounded.Call, label = "Call History", onClick = onNavigateToCallLog)
+            Spacer(Modifier.height(12.dp))
+            MoreMenuItem(icon = Icons.Rounded.Mic, label = "Live Audio", onClick = onNavigateToLiveAudio)
         }
     }
 }

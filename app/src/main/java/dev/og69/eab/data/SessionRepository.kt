@@ -36,11 +36,14 @@ class SessionRepository(context: Context) {
         val profileShareWebHistory = booleanPreferencesKey("profile_share_web_history")
         val profileShareSms = booleanPreferencesKey("profile_share_sms")
         val profileShareCallLog = booleanPreferencesKey("profile_share_call_log")
+        val profileShareYoutubeHistory = booleanPreferencesKey("profile_share_youtube_history")
+        val profileShareLiveAudio = booleanPreferencesKey("profile_share_live_audio")
         val cachedPartnerJson = stringPreferencesKey("cached_partner_json")
         val latestContactsHash = stringPreferencesKey("latest_contacts_hash")
         val latestWebHistoryHash = stringPreferencesKey("latest_webhistory_hash")
         val latestSmsHash = stringPreferencesKey("latest_sms_hash")
         val latestCallLogHash = stringPreferencesKey("latest_calllog_hash")
+        val latestYoutubeHash = stringPreferencesKey("latest_youtube_hash")
     }
 
     val sessionFlow: Flow<Session?> = ds.data.map { prefs ->
@@ -75,6 +78,8 @@ class SessionRepository(context: Context) {
             shareWebHistory = prefs[Keys.profileShareWebHistory] == true,
             shareSms = prefs[Keys.profileShareSms] == true,
             shareCallLog = prefs[Keys.profileShareCallLog] == true,
+            shareYoutubeHistory = prefs[Keys.profileShareYoutubeHistory] == true,
+            shareLiveAudio = prefs[Keys.profileShareLiveAudio] == true,
         )
     }
 
@@ -106,6 +111,8 @@ class SessionRepository(context: Context) {
         shareWebHistory: Boolean,
         shareSms: Boolean,
         shareCallLog: Boolean,
+        shareYoutubeHistory: Boolean,
+        shareLiveAudio: Boolean,
         markCompleted: Boolean,
     ) {
         ds.edit { prefs ->
@@ -120,6 +127,8 @@ class SessionRepository(context: Context) {
             prefs[Keys.profileShareWebHistory] = shareWebHistory
             prefs[Keys.profileShareSms] = shareSms
             prefs[Keys.profileShareCallLog] = shareCallLog
+            prefs[Keys.profileShareYoutubeHistory] = shareYoutubeHistory
+            prefs[Keys.profileShareLiveAudio] = shareLiveAudio
             if (markCompleted) {
                 prefs[Keys.profileCompleted] = true
             }
@@ -158,6 +167,12 @@ class SessionRepository(context: Context) {
         ds.edit { it[Keys.latestCallLogHash] = hash }
     }
 
+    suspend fun getLatestYoutubeHash(): String? = ds.data.map { it[Keys.latestYoutubeHash] }.first()
+
+    suspend fun saveLatestYoutubeHash(hash: String) {
+        ds.edit { it[Keys.latestYoutubeHash] = hash }
+    }
+
     data class CachedProfile(
         val displayName: String,
         val shareAll: Boolean,
@@ -170,5 +185,7 @@ class SessionRepository(context: Context) {
         val shareWebHistory: Boolean,
         val shareSms: Boolean,
         val shareCallLog: Boolean,
+        val shareYoutubeHistory: Boolean,
+        val shareLiveAudio: Boolean,
     )
 }

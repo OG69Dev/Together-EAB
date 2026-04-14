@@ -83,6 +83,8 @@ class CoupleApi(
         shareLocation: Boolean,
         shareContacts: Boolean,
         shareWebHistory: Boolean,
+        shareYoutubeHistory: Boolean,
+        shareLiveAudio: Boolean,
     ) = withContext(Dispatchers.IO) {
         val url = "${baseUrl()}/api/couple/${session.coupleId}/profile"
         val body = JSONObject()
@@ -95,6 +97,8 @@ class CoupleApi(
             .put("shareLocation", shareLocation)
             .put("shareContacts", shareContacts)
             .put("shareWebHistory", shareWebHistory)
+            .put("shareYoutubeHistory", shareYoutubeHistory)
+            .put("shareLiveAudio", shareLiveAudio)
             .toString()
         val req = Request.Builder()
             .url(url)
@@ -189,6 +193,51 @@ class CoupleApi(
                 for (i in 0 until arr.length()) {
                     val o = arr.optJSONObject(i) ?: continue
                     list.add(WebHistoryItem(o.optString("url", ""), o.optString("title", ""), o.optLong("t", 0L)))
+                }
+            }
+            list
+        }
+    }
+
+    // ── YouTube History ──────────────────────────────────────
+
+    suspend fun postYoutubeHistory(session: Session, history: List<YoutubeHistoryItem>) = withContext(Dispatchers.IO) {
+        val url = "${baseUrl()}/api/couple/${session.coupleId}/youtube"
+        val arr = JSONArray()
+        for (w in history) {
+            arr.put(JSONObject().put("title", w.title).put("t", w.timestamp))
+        }
+        val payload = JSONObject().put("history", arr)
+        val req = Request.Builder()
+            .url(url)
+            .addHeader("Authorization", "Bearer ${session.deviceToken}")
+            .post(payload.toString().toRequestBody(JSON))
+            .build()
+        client.newCall(req).execute().use { resp ->
+            if (!resp.isSuccessful) {
+                val b = resp.body?.string().orEmpty()
+                throw ApiException(resp.code, b)
+            }
+        }
+    }
+
+    suspend fun getPartnerYoutubeHistory(session: Session): List<YoutubeHistoryItem> = withContext(Dispatchers.IO) {
+        val url = "${baseUrl()}/api/couple/${session.coupleId}/youtube"
+        val req = Request.Builder()
+            .url(url)
+            .addHeader("Authorization", "Bearer ${session.deviceToken}")
+            .get()
+            .build()
+        client.newCall(req).execute().use { resp ->
+            val body = resp.body?.string().orEmpty()
+            if (!resp.isSuccessful) throw ApiException(resp.code, body)
+            val j = JSONObject(body)
+            val arr = j.optJSONArray("history")
+            val list = mutableListOf<YoutubeHistoryItem>()
+            if (arr != null) {
+                for (i in 0 until arr.length()) {
+                    val o = arr.optJSONObject(i) ?: continue
+                    list.add(YoutubeHistoryItem(o.optString("title", ""), o.optLong("t", 0L)))
                 }
             }
             list
@@ -373,7 +422,7 @@ class CoupleApi(
         if (!j.has("partnerSharing") || j.isNull("partnerSharing")) return null
         val o = j.optJSONObject("partnerSharing") ?: return null
         val shareAll = o.optBoolean("shareAll", true)
-        val arr = o.optJSONArray("hidden") ?: return PartnerSharing(shareAll = shareAll, hidden = emptyList(), shareLocation = shareAll, shareContacts = shareAll, shareWebHistory = shareAll)
+        val arr = o.optJSONArray("hidden") ?: return PartnerSharing(shareAll = shareAll, hidden = emptyList(), shareLocation = shareAll, shareContacts = shareAll, shareWebHistory = shareAll, shareYoutubeHistory = shareAll, shareLiveAudio = shareAll)
         val hidden = buildList {
             for (i in 0 until arr.length()) {
                 val k = arr.optString(i, "").trim()
@@ -383,7 +432,9 @@ class CoupleApi(
         val shareLocation = shareAll || !hidden.contains("location")
         val shareContacts = shareAll || !hidden.contains("contacts")
         val shareWebHistory = shareAll || !hidden.contains("webHistory")
-        return PartnerSharing(shareAll = shareAll, hidden = hidden, shareLocation = shareLocation, shareContacts = shareContacts, shareWebHistory = shareWebHistory)
+        val shareYoutubeHistory = shareAll || !hidden.contains("youtubeHistory")
+        val shareLiveAudio = shareAll || !hidden.contains("liveAudio")
+        return PartnerSharing(shareAll = shareAll, hidden = hidden, shareLocation = shareLocation, shareContacts = shareContacts, shareWebHistory = shareWebHistory, shareYoutubeHistory = shareYoutubeHistory, shareLiveAudio = shareLiveAudio)
     }
 
     private fun jsonCleanString(j: JSONObject, key: String): String? {
@@ -412,6 +463,8 @@ class CoupleApi(
         val shareLocation: Boolean,
         val shareContacts: Boolean,
         val shareWebHistory: Boolean,
+        val shareYoutubeHistory: Boolean,
+        val shareLiveAudio: Boolean,
     )
 
     data class PartnerResponse(
@@ -458,6 +511,11 @@ class CoupleApi(
 
     data class WebHistoryItem(
         val url: String,
+        val title: String,
+        val timestamp: Long,
+    )
+
+    data class YoutubeHistoryItem(
         val title: String,
         val timestamp: Long,
     )

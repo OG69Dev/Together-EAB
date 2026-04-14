@@ -35,8 +35,10 @@ fun MainHostScreen(
     onEditProfile: () -> Unit,
     onNavigateToContacts: () -> Unit,
     onNavigateToWebHistory: () -> Unit,
+    onNavigateToYoutubeHistory: () -> Unit,
     onNavigateToSmsHistory: () -> Unit,
     onNavigateToCallLog: () -> Unit,
+    onNavigateToLiveAudio: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
@@ -79,8 +81,10 @@ fun MainHostScreen(
                 2 -> RightEmptyScreen(
                     onNavigateToContacts = onNavigateToContacts,
                     onNavigateToWebHistory = onNavigateToWebHistory,
+                    onNavigateToYoutubeHistory = onNavigateToYoutubeHistory,
                     onNavigateToSmsHistory = onNavigateToSmsHistory,
                     onNavigateToCallLog = onNavigateToCallLog,
+                    onNavigateToLiveAudio = onNavigateToLiveAudio,
                 )
             }
         }

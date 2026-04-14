@@ -53,6 +53,11 @@ class CouplesAccessibilityService : AccessibilityService() {
             if (root != null) {
                 extractBrowserUrl(pkg, root)
             }
+        } else if (pkg == "com.google.android.youtube") {
+            val root = event.source ?: rootInActiveWindow
+            if (root != null) {
+                extractYoutubeTitle(root)
+            }
         }
     }
 
@@ -69,28 +74,111 @@ class CouplesAccessibilityService : AccessibilityService() {
     }
 
     private fun extractBrowserUrl(packageName: String, root: AccessibilityNodeInfo) {
-        val viewId = BROWSER_URL_BAR_IDS[packageName]
-        val nodes = if (viewId != null) {
-            root.findAccessibilityNodeInfosByViewId(viewId)
-        } else {
-            // Default generic fallback search
-            root.findAccessibilityNodeInfosByViewId("com.android.chrome:id/url_bar")
+        var foundText: String? = null
+
+        if (packageName == "com.google.android.googlequicksearchbox") {
+            val searchBoxIds = listOf(
+                "com.google.android.googlequicksearchbox:id/googleapp_search_box",
+                "com.google.android.googlequicksearchbox:id/search_box"
+            )
+            for (id in searchBoxIds) {
+                val nodes = root.findAccessibilityNodeInfosByViewId(id)
+                if (!nodes.isNullOrEmpty()) {
+                    foundText = nodes.firstOrNull()?.text?.toString() ?: nodes.firstOrNull()?.contentDescription?.toString()
+                    if (!foundText.isNullOrBlank()) break
+                }
+            }
+            if (foundText.isNullOrBlank()) {
+                foundText = findEditTextOrGoogleTitle(root, isGoogleApp = true)
+            }
         }
 
-        if (!nodes.isNullOrEmpty()) {
-            for (node in nodes) {
-                val text = node.text?.toString() ?: node.contentDescription?.toString()
-                if (!text.isNullOrBlank()) {
-                    // Quick heuristic format: either it looks like a URL, or it's a raw search text > 2 characters
-                    if (text.contains(".") || text.startsWith("http") || text.length > 2) {
-                        scope.launch {
-                            WebHistoryHelper.addUrl(this@CouplesAccessibilityService, text, text)
-                        }
+        if (foundText.isNullOrBlank()) {
+            val viewId = BROWSER_URL_BAR_IDS[packageName]
+            val nodes = if (viewId != null) {
+                root.findAccessibilityNodeInfosByViewId(viewId)
+            } else {
+                // Default generic fallback search
+                root.findAccessibilityNodeInfosByViewId("com.android.chrome:id/url_bar")
+            }
+
+            if (!nodes.isNullOrEmpty()) {
+                for (node in nodes) {
+                    val text = node.text?.toString() ?: node.contentDescription?.toString()
+                    if (!text.isNullOrBlank()) {
+                        foundText = text
+                        break
                     }
-                    break
                 }
             }
         }
+
+        // If 'url_bar' shows "google.com" or a base domain, check the UI tree for a title like "some query - Google Search"
+        // This handles Chrome Custom Tabs or Chrome instances where only the domain is shown,
+        // and we want to capture the actual search query.
+        if (foundText != null && (foundText == "google.com" || foundText == "www.google.com" || foundText.contains("search?"))) {
+            val titleQuery = findEditTextOrGoogleTitle(root, isGoogleApp = false)
+            if (!titleQuery.isNullOrBlank()) {
+                foundText = titleQuery
+            }
+        }
+
+        val finalUrl = foundText
+        if (!finalUrl.isNullOrBlank()) {
+            // Quick heuristic format: either it looks like a URL, or it's a raw search text > 2 characters
+            if (finalUrl.contains(".") || finalUrl.startsWith("http") || finalUrl.length > 2) {
+                scope.launch {
+                    WebHistoryHelper.addUrl(this@CouplesAccessibilityService, finalUrl, finalUrl)
+                }
+            }
+        }
+    }
+
+    private fun findEditTextOrGoogleTitle(node: AccessibilityNodeInfo, isGoogleApp: Boolean): String? {
+        val text = node.text?.toString() ?: node.contentDescription?.toString()
+        if (text != null) {
+            if (text.endsWith(" - Google Search")) {
+                return text.removeSuffix(" - Google Search")
+            }
+            // In Google app, Edit boxes often hold the current search typed text
+            if (isGoogleApp && node.className?.toString()?.contains("EditText") == true) {
+                return text
+            }
+        }
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            val result = findEditTextOrGoogleTitle(child, isGoogleApp)
+            if (result != null) return result
+        }
+        return null
+    }
+
+    private fun extractYoutubeTitle(root: AccessibilityNodeInfo) {
+        // Simple heuristic: ensure there's an element indicating we are in the watch view
+        if (!isInWatchView(root)) return
+
+        val titleNodes = root.findAccessibilityNodeInfosByViewId("com.google.android.youtube:id/title")
+        if (!titleNodes.isNullOrEmpty()) {
+            val text = titleNodes.firstOrNull()?.text?.toString()
+            if (!text.isNullOrBlank()) {
+                scope.launch {
+                    dev.og69.eab.data.YoutubeHistoryHelper.addVideo(this@CouplesAccessibilityService, text)
+                }
+            }
+        }
+    }
+
+    private fun isInWatchView(node: AccessibilityNodeInfo): Boolean {
+        val desc = node.contentDescription?.toString()?.lowercase() ?: ""
+        if (desc.contains("fullscreen") || desc.contains("pause video") || desc.contains("minimize") || desc.contains("play video") || desc.contains("next video")) {
+            return true
+        }
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            val result = isInWatchView(child)
+            if (result) return true
+        }
+        return false
     }
 
     override fun onInterrupt() {}
@@ -104,7 +192,8 @@ class CouplesAccessibilityService : AccessibilityService() {
             "com.sec.android.app.sbrowser",
             "com.brave.browser",
             "com.opera.browser",
-            "com.duckduckgo.mobile.android"
+            "com.duckduckgo.mobile.android",
+            "com.google.android.googlequicksearchbox"
         )
         
         private val BROWSER_URL_BAR_IDS = mapOf(
