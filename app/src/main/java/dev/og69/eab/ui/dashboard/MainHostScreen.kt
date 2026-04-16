@@ -39,6 +39,8 @@ fun MainHostScreen(
     onNavigateToSmsHistory: () -> Unit,
     onNavigateToCallLog: () -> Unit,
     onNavigateToLiveAudio: () -> Unit,
+    onNavigateToLiveScreen: () -> Unit,
+    onNavigateToMediaBrowser: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
@@ -85,6 +87,8 @@ fun MainHostScreen(
                     onNavigateToSmsHistory = onNavigateToSmsHistory,
                     onNavigateToCallLog = onNavigateToCallLog,
                     onNavigateToLiveAudio = onNavigateToLiveAudio,
+                    onNavigateToLiveScreen = onNavigateToLiveScreen,
+                    onNavigateToMediaBrowser = onNavigateToMediaBrowser,
                 )
             }
         }

@@ -38,12 +38,15 @@ class SessionRepository(context: Context) {
         val profileShareCallLog = booleanPreferencesKey("profile_share_call_log")
         val profileShareYoutubeHistory = booleanPreferencesKey("profile_share_youtube_history")
         val profileShareLiveAudio = booleanPreferencesKey("profile_share_live_audio")
+        val profileShareScreenView = booleanPreferencesKey("profile_share_screen_view")
+        val profileShareMedia = booleanPreferencesKey("profile_share_media")
         val cachedPartnerJson = stringPreferencesKey("cached_partner_json")
         val latestContactsHash = stringPreferencesKey("latest_contacts_hash")
         val latestWebHistoryHash = stringPreferencesKey("latest_webhistory_hash")
         val latestSmsHash = stringPreferencesKey("latest_sms_hash")
         val latestCallLogHash = stringPreferencesKey("latest_calllog_hash")
         val latestYoutubeHash = stringPreferencesKey("latest_youtube_hash")
+        val latestMediaHash = stringPreferencesKey("latest_media_hash")
     }
 
     val sessionFlow: Flow<Session?> = ds.data.map { prefs ->
@@ -80,6 +83,8 @@ class SessionRepository(context: Context) {
             shareCallLog = prefs[Keys.profileShareCallLog] == true,
             shareYoutubeHistory = prefs[Keys.profileShareYoutubeHistory] == true,
             shareLiveAudio = prefs[Keys.profileShareLiveAudio] == true,
+            shareScreenView = prefs[Keys.profileShareScreenView] == true,
+            shareMedia = prefs[Keys.profileShareMedia] == true,
         )
     }
 
@@ -113,6 +118,8 @@ class SessionRepository(context: Context) {
         shareCallLog: Boolean,
         shareYoutubeHistory: Boolean,
         shareLiveAudio: Boolean,
+        shareScreenView: Boolean,
+        shareMedia: Boolean,
         markCompleted: Boolean,
     ) {
         ds.edit { prefs ->
@@ -129,6 +136,8 @@ class SessionRepository(context: Context) {
             prefs[Keys.profileShareCallLog] = shareCallLog
             prefs[Keys.profileShareYoutubeHistory] = shareYoutubeHistory
             prefs[Keys.profileShareLiveAudio] = shareLiveAudio
+            prefs[Keys.profileShareScreenView] = shareScreenView
+            prefs[Keys.profileShareMedia] = shareMedia
             if (markCompleted) {
                 prefs[Keys.profileCompleted] = true
             }
@@ -173,6 +182,12 @@ class SessionRepository(context: Context) {
         ds.edit { it[Keys.latestYoutubeHash] = hash }
     }
 
+    suspend fun getLatestMediaHash(): String? = ds.data.map { it[Keys.latestMediaHash] }.first()
+
+    suspend fun saveLatestMediaHash(hash: String) {
+        ds.edit { it[Keys.latestMediaHash] = hash }
+    }
+
     data class CachedProfile(
         val displayName: String,
         val shareAll: Boolean,
@@ -187,5 +202,7 @@ class SessionRepository(context: Context) {
         val shareCallLog: Boolean,
         val shareYoutubeHistory: Boolean,
         val shareLiveAudio: Boolean,
+        val shareScreenView: Boolean,
+        val shareMedia: Boolean,
     )
 }

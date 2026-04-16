@@ -26,30 +26,27 @@ import dev.og69.eab.MainActivity
 import dev.og69.eab.R
 import dev.og69.eab.data.Session
 import dev.og69.eab.data.SessionRepository
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.isActive
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
+import android.graphics.PixelFormat
+import android.view.WindowManager
+import dev.og69.eab.overlay.DrawingCanvasView
+import dev.og69.eab.data.MediaHelper
+import dev.og69.eab.data.MediaItem
+import dev.og69.eab.data.MediaCacheManager
+import dev.og69.eab.webrtc.WebRtcManager
+import kotlinx.coroutines.channels.Channel
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Foreground service that maintains a persistent WebSocket connection
  * to the Cloudflare Durable Object for real-time partner updates.
- *
- * Lifecycle:
- *   - Started after login (couple create / join + profile completed)
- *   - Stopped on sign-out
- *   - Reconnects with exponential backoff on disconnect/error
  */
 class WebSocketService : Service() {
 
@@ -62,12 +59,17 @@ class WebSocketService : Service() {
 
         val signalingFlow = kotlinx.coroutines.flow.MutableSharedFlow<org.json.JSONObject>(extraBufferCapacity = 64)
         val audioStateFlow = kotlinx.coroutines.flow.MutableStateFlow(dev.og69.eab.webrtc.WebRtcManager.State.IDLE)
+        val screenStateFlow = kotlinx.coroutines.flow.MutableStateFlow(dev.og69.eab.webrtc.WebRtcManager.State.IDLE)
+        val mediaStateFlow = kotlinx.coroutines.flow.MutableStateFlow(dev.og69.eab.webrtc.WebRtcManager.State.IDLE)
+        val remoteVideoTrackFlow = kotlinx.coroutines.flow.MutableStateFlow<org.webrtc.VideoTrack?>(null)
+        
+        val mediaBinaryFlow = kotlinx.coroutines.flow.MutableSharedFlow<Pair<Long, ByteArray>>(extraBufferCapacity = 16)
 
         private var instance: WebSocketService? = null
+        private var screenCaptureIntent: android.content.Intent? = null
 
         fun requestAudio() {
             instance?.let { srv ->
-                Log.d(TAG, "Initiating audio listening request")
                 srv.ensureWebRtc()
                 srv.webRtcManager?.start(dev.og69.eab.webrtc.WebRtcManager.Role.LISTENER)
                 srv.sendSignaling(org.json.JSONObject().put("type", "request_audio"))
@@ -75,12 +77,52 @@ class WebSocketService : Service() {
         }
 
         fun stopAudio() {
-            Log.d(TAG, "Stopping live audio")
             instance?.stopAudio()
             instance?.sendSignaling(org.json.JSONObject().put("type", "stop_audio"))
         }
 
-        /** Maximum backoff delay (2 min). */
+        fun requestScreen() {
+            instance?.let { srv ->
+                srv.ensureWebRtc()
+                srv.webRtcManager?.start(dev.og69.eab.webrtc.WebRtcManager.Role.SCREEN_LISTENER)
+                srv.sendSignaling(org.json.JSONObject().put("type", "request_screen"))
+            }
+        }
+
+        fun stopScreen() {
+            instance?.stopScreen()
+            instance?.sendSignaling(org.json.JSONObject().put("type", "stop_screen"))
+        }
+
+        fun requestMedia() {
+            instance?.requestMedia()
+        }
+
+        fun stopMedia() {
+            instance?.stopMedia()
+        }
+
+        fun sendMediaCommand(json: String) {
+            instance?.webRtcManager?.sendMediaJson(json)
+        }
+
+        fun setScreenCaptureResult(resultCode: Int, data: android.content.Intent) {
+            screenCaptureIntent = data
+            instance?.let { srv ->
+                srv.ensureWebRtc()
+                srv.updateForegroundService("Screen Share Active")
+                srv.scope.launch {
+                    delay(500)
+                    srv.webRtcManager?.start(dev.og69.eab.webrtc.WebRtcManager.Role.SCREEN_STREAMER, data)
+                }
+                srv.startOverlay()
+            }
+        }
+
+        fun sendDrawingData(json: String) {
+            instance?.webRtcManager?.sendData(json)
+        }
+
         private const val MAX_BACKOFF_MS = 120_000L
 
         fun start(context: Context, session: Session) {
@@ -99,10 +141,6 @@ class WebSocketService : Service() {
             context.stopService(Intent(context, WebSocketService::class.java))
         }
 
-        /**
-         * Fully stops and restarts the service so it picks up the correct
-         * foreground service types (e.g. after location permission is granted).
-         */
         fun restart(context: Context, session: Session) {
             stop(context)
             start(context, session)
@@ -114,24 +152,39 @@ class WebSocketService : Service() {
     private var ws: WebSocket? = null
     private var backoffMs = 1_000L
     private var webRtcManager: dev.og69.eab.webrtc.WebRtcManager? = null
+    private var mediaHelper: MediaHelper? = null
+    private var cacheManager: MediaCacheManager? = null
+    private var mediaObserveJob: kotlinx.coroutines.Job? = null
     private var coupleId: String = ""
     private var deviceToken: String = ""
+    
+    // Binary state tracking
+    private val pendingMediaIds = Channel<Long>(Channel.UNLIMITED)
+    private var activeDownloadId: Long = -1L
+
+    // Media lifecycle management
+    private var mediaActiveCount = 0
+    private var mediaStopJob: Job? = null
 
     private lateinit var fusedLocationClient: FusedLocationProviderClient
     private var locationCallback: LocationCallback? = null
 
+    private lateinit var windowManager: WindowManager
+    private var canvasView: DrawingCanvasView? = null
+
     private val client by lazy {
         OkHttpClient.Builder()
             .connectTimeout(30, TimeUnit.SECONDS)
-            .readTimeout(0, TimeUnit.MINUTES)      // WebSocket: no read timeout
+            .readTimeout(0, TimeUnit.MINUTES)
             .writeTimeout(30, TimeUnit.SECONDS)
-            .pingInterval(25, TimeUnit.SECONDS)     // Keep-alive pings
+            .pingInterval(25, TimeUnit.SECONDS)
             .build()
     }
 
     override fun onCreate() {
         super.onCreate()
         instance = this
+        windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
         ensureChannel()
         fusedLocationClient = LocationServices.getFusedLocationProviderClient(this)
     }
@@ -143,53 +196,23 @@ class WebSocketService : Service() {
             stopSelf()
             return START_NOT_STICKY
         }
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            var type = android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
-            if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                    type = type or android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
-                }
-            }
-            if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                    type = type or android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
-                }
-            }
-            try {
-                startForeground(NOTIF_ID, buildNotification("Connecting…"), type)
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed startForeground with type", e)
-                try {
-                    startForeground(NOTIF_ID, buildNotification("Connecting…"))
-                } catch (e2: Exception) {
-                    Log.e(TAG, "Failed startForeground without type", e2)
-                }
-            }
-        } else {
-            startForeground(NOTIF_ID, buildNotification("Connecting…"))
-        }
-
+        updateForegroundService("Connecting…")
         if (running.compareAndSet(false, true)) {
             connect()
         }
-        
-        // Attempt to start location tracking whenever service is started,
-        // in case permissions were just granted.
         startLocationTracking()
-        
         return START_STICKY
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
-        Log.d(TAG, "Service destroying")
         running.set(false)
         stopLocationTracking()
         ws?.close(1000, "Service destroyed")
         ws = null
         stopAudio()
+        actuallyStopMedia()
         webRtcManager?.dispose()
         webRtcManager = null
         scope.cancel()
@@ -197,48 +220,33 @@ class WebSocketService : Service() {
         super.onDestroy()
     }
 
-    /* ── WebSocket connection ─────────────────────────── */
-
     private fun connect() {
         if (!running.get()) return
-
         val base = ApiConfig.WORKER_BASE_URL.trim().trimEnd('/')
         val scheme = if (base.startsWith("https")) "wss" else "ws"
         val host = base.removePrefix("https://").removePrefix("http://")
         val wsUrl = "$scheme://$host/api/couple/$coupleId/ws"
-
         val request = Request.Builder()
             .url(wsUrl)
             .addHeader("Authorization", "Bearer $deviceToken")
             .build()
 
         ws = client.newWebSocket(request, object : WebSocketListener() {
-
             override fun onOpen(webSocket: WebSocket, response: Response) {
-                Log.d(TAG, "WebSocket connected")
-                backoffMs = 1_000L                      // Reset backoff
+                backoffMs = 1_000L
                 updateNotification("Connected")
                 startTelemetryPolling()
             }
-
             override fun onMessage(webSocket: WebSocket, text: String) {
-                scope.launch {
-                    handleMessage(text)
-                }
+                scope.launch { handleMessage(text) }
             }
-
             override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
-                Log.d(TAG, "WebSocket closing: $code $reason")
                 webSocket.close(code, reason)
             }
-
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                Log.d(TAG, "WebSocket closed: $code $reason")
                 scheduleReconnect()
             }
-
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                Log.w(TAG, "WebSocket failure: ${t.message}")
                 scheduleReconnect()
             }
         })
@@ -254,10 +262,7 @@ class WebSocketService : Service() {
         }
     }
 
-    /* ── Tracking & Message handling ─────────────────────────────── */
-
     private var telemetryJob: kotlinx.coroutines.Job? = null
-
     private fun startTelemetryPolling() {
         telemetryJob?.cancel()
         telemetryJob = scope.launch {
@@ -291,14 +296,9 @@ class WebSocketService : Service() {
                 dev.og69.eab.telemetry.ForegroundResolver.resolve(ctx)
             }
             val fullTelemetryJson = dev.og69.eab.network.CoupleApi.buildTelemetryJson(
-                batteryPct = batt,
-                diskFreeBytes = free,
-                diskTotalBytes = total,
-                foregroundPackage = fgPkg,
-                foregroundAppLabel = fgLabel,
-                usageStats = ut.first,
-                usageTodayTotalMs = ut.second,
-                usageWeekTotalMs = ut.third,
+                batteryPct = batt, diskFreeBytes = free, diskTotalBytes = total,
+                foregroundPackage = fgPkg, foregroundAppLabel = fgLabel,
+                usageStats = ut.first, usageTodayTotalMs = ut.second, usageWeekTotalMs = ut.third,
                 usageDailyAvgMs = if (ut.third > 0L) ut.third / 7L else 0L,
             )
             val msg = org.json.JSONObject().apply {
@@ -307,22 +307,16 @@ class WebSocketService : Service() {
             }
             ws?.send(msg.toString())
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to send full telemetry via WS", e)
+            Log.e(TAG, "Failed telemetry send", e)
         }
     }
 
     private fun startLocationTracking() {
-        if (locationCallback != null) return // Already tracking
-        
+        if (locationCallback != null) return
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED &&
-            ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
-            return
-        }
+            ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) return
 
-        val request = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 10000)
-            .setMinUpdateDistanceMeters(10f)
-            .build()
-
+        val request = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 10000).setMinUpdateDistanceMeters(10f).build()
         locationCallback = object : LocationCallback() {
             override fun onLocationResult(result: LocationResult) {
                 result.lastLocation?.let { loc ->
@@ -335,18 +329,13 @@ class WebSocketService : Service() {
                 }
             }
         }
-
         try {
             fusedLocationClient.requestLocationUpdates(request, locationCallback!!, Looper.getMainLooper())
-        } catch (e: SecurityException) {
-            Log.e(TAG, "Location permission not granted", e)
-        }
+        } catch (e: SecurityException) { /* ignored */ }
     }
 
     private fun stopLocationTracking() {
-        locationCallback?.let {
-            fusedLocationClient.removeLocationUpdates(it)
-        }
+        locationCallback?.let { fusedLocationClient.removeLocationUpdates(it) }
         locationCallback = null
     }
 
@@ -361,39 +350,223 @@ class WebSocketService : Service() {
                     put("t", time)
                 })
             }
-            val msg = org.json.JSONObject().apply {
+            ws?.send(org.json.JSONObject().apply {
                 put("type", "telemetry")
                 put("payload", payload)
-            }
-            ws?.send(msg.toString())
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to send location", e)
-        }
+            }.toString())
+        } catch (e: Exception) { /* ignored */ }
     }
 
     fun sendSignaling(data: org.json.JSONObject) {
         val socket = ws ?: return
         try {
-            val msg = org.json.JSONObject().apply {
+            socket.send(org.json.JSONObject().apply {
                 put("type", "signaling")
                 put("payload", data)
-            }
-            socket.send(msg.toString())
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to send signaling message", e)
-        }
+            }.toString())
+        } catch (e: Exception) { /* ignored */ }
     }
 
     private fun ensureWebRtc() {
         if (webRtcManager == null) {
             webRtcManager = dev.og69.eab.webrtc.WebRtcManager(applicationContext, 
                 onSignalingMessage = { data -> sendSignaling(data) },
-                onStateChange = { state -> audioStateFlow.value = state }
+                onStateChange = { state -> 
+                    audioStateFlow.value = state 
+                    screenStateFlow.value = state
+                    mediaStateFlow.value = state
+                },
+                onVideoTrack = { track -> remoteVideoTrackFlow.value = track },
+                onDataChannelMessage = { msg -> handleDrawingMessage(msg) },
+                onMediaJsonMessage = { msg -> handleMediaCommand(msg) },
+                onMediaBinaryMessage = { data -> handleMediaBinary(data) },
+                onMediaChannelOpen = { 
+                    if (webRtcManager?.role == dev.og69.eab.webrtc.WebRtcManager.Role.MEDIA_PROVIDER) {
+                        sendMediaList() 
+                    }
+                }
             )
+        }
+        if (mediaHelper == null) mediaHelper = MediaHelper(applicationContext)
+        if (cacheManager == null) cacheManager = MediaCacheManager(applicationContext)
+    }
+
+    private fun handleMediaCommand(msg: String) {
+        scope.launch {
+            try {
+                val json = org.json.JSONObject(msg)
+                val type = json.optString("type")
+                
+                when (type) {
+                    "THUMBNAIL_DATA" -> {
+                        pendingMediaIds.trySend(json.getLong("id"))
+                    }
+                    "FILE_START" -> {
+                        activeDownloadId = json.getLong("id")
+                    }
+                    "FILE_END" -> {
+                        activeDownloadId = -1L
+                    }
+                    "GET_THUMBNAIL" -> {
+                        val id = json.getLong("id")
+                        val item = mediaHelper?.getMediaList()?.find { it.id == id }
+                        item?.let {
+                            val thumb = mediaHelper?.getThumbnail(it)
+                            if (thumb != null) {
+                                webRtcManager?.sendMediaJson(org.json.JSONObject().apply {
+                                    put("type", "THUMBNAIL_DATA")
+                                    put("id", id)
+                                    put("size", thumb.size)
+                                }.toString())
+                                webRtcManager?.sendMediaBinary(thumb)
+                            }
+                        }
+                    }
+                    "GET_FILE" -> {
+                        val id = json.getLong("id")
+                        val item = mediaHelper?.getMediaList()?.find { it.id == id }
+                        item?.let { sendFileInChunks(it) }
+                    }
+                }
+                
+                signalingFlow.emit(json) // Forward to UI
+            } catch (e: Exception) { /* ignored */ }
         }
     }
 
-    fun stopAudio() {
+    private fun handleMediaBinary(data: ByteArray) {
+        scope.launch {
+            try {
+                val id = if (activeDownloadId != -1L) {
+                    activeDownloadId
+                } else {
+                    pendingMediaIds.receive()
+                }
+                
+                // Save to cache automatically if it's a thumbnail (multi-packet files handled in UI for now)
+                if (activeDownloadId == -1L) {
+                    cacheManager?.saveThumbnail(id, data)
+                }
+                
+                mediaBinaryFlow.emit(id to data)
+            } catch (e: Exception) { /* ignored */ }
+        }
+    }
+
+    private fun sendMediaList() {
+        scope.launch {
+            val list = mediaHelper?.getMediaList() ?: emptyList()
+            Log.d(TAG, "sendMediaList: found ${list.size} items")
+            val array = org.json.JSONArray()
+            list.forEach { 
+                array.put(org.json.JSONObject().apply {
+                    put("id", it.id)
+                    put("name", it.name)
+                    put("type", it.type)
+                    put("date", it.dateAdded)
+                })
+            }
+            webRtcManager?.sendMediaJson(org.json.JSONObject().apply {
+                put("type", "MEDIA_LIST")
+                put("items", array)
+            }.toString())
+        }
+    }
+
+    private fun sendFileInChunks(item: MediaItem) {
+        scope.launch(Dispatchers.IO) {
+            try {
+                val file = java.io.File(item.path)
+                if (!file.exists()) return@launch
+                val fileSize = file.length()
+                val chunkSize = 16384
+                val totalChunks = ((fileSize + chunkSize - 1) / chunkSize).toInt()
+                webRtcManager?.sendMediaJson(org.json.JSONObject().apply {
+                    put("type", "FILE_START")
+                    put("id", item.id)
+                    put("name", item.name)
+                    put("size", fileSize)
+                    put("chunks", totalChunks)
+                    put("mime", if (item.type == "video") "video/mp4" else "image/jpeg")
+                }.toString())
+                file.inputStream().use { input ->
+                    val buffer = ByteArray(chunkSize)
+                    var bytesRead: Int
+                    while (input.read(buffer).also { bytesRead = it } != -1) {
+                        webRtcManager?.sendMediaBinary(if (bytesRead == chunkSize) buffer else buffer.copyOf(bytesRead))
+                        yield()
+                    }
+                }
+                webRtcManager?.sendMediaJson(org.json.JSONObject().apply {
+                    put("type", "FILE_END")
+                    put("id", item.id)
+                }.toString())
+            } catch (e: Exception) { /* ignored */ }
+        }
+    }
+
+    private fun handleDrawingMessage(msg: String) {
+        scope.launch(Dispatchers.Main) { canvasView?.handleCommand(msg) }
+    }
+
+    private fun startOverlay() {
+        if (!android.provider.Settings.canDrawOverlays(this)) return
+        scope.launch(Dispatchers.Main) {
+            if (canvasView != null) return@launch
+            val params = WindowManager.LayoutParams(
+                WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT,
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY else WindowManager.LayoutParams.TYPE_PHONE,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                PixelFormat.TRANSLUCENT
+            )
+            canvasView = DrawingCanvasView(applicationContext)
+            windowManager.addView(canvasView, params)
+        }
+    }
+
+    private fun stopOverlay() {
+        scope.launch(Dispatchers.Main) {
+            canvasView?.let { windowManager.removeView(it) }
+            canvasView = null
+        }
+    }
+
+    fun stopAudio() { webRtcManager?.stop(); updateNotification("Connected") }
+    fun stopScreen() { webRtcManager?.stop(); stopOverlay(); screenCaptureIntent = null; updateForegroundService("Connected") }
+    
+    fun requestMedia() {
+        mediaActiveCount++
+        mediaStopJob?.cancel()
+        ensureWebRtc()
+        
+        // Always send signaling to ensure we get a fresh list
+        sendSignaling(org.json.JSONObject().put("type", "request_media"))
+
+        val mgr = webRtcManager
+        if (mgr != null && mgr.role == WebRtcManager.Role.MEDIA_CONSUMER && mgr.state != WebRtcManager.State.IDLE) {
+            // Already active in this role, skip redundant start
+            return
+        }
+        
+        mgr?.start(dev.og69.eab.webrtc.WebRtcManager.Role.MEDIA_CONSUMER)
+    }
+
+    fun stopMedia() {
+        mediaActiveCount--
+        if (mediaActiveCount <= 0) {
+            mediaStopJob = scope.launch {
+                delay(2000) // Debounce for navigation transitions
+                if (mediaActiveCount <= 0) {
+                    actuallyStopMedia()
+                    sendSignaling(org.json.JSONObject().put("type", "stop_media"))
+                }
+            }
+        }
+    }
+
+    private fun actuallyStopMedia() {
+        mediaObserveJob?.cancel()
+        mediaObserveJob = null
         webRtcManager?.stop()
         updateNotification("Connected")
     }
@@ -402,94 +575,76 @@ class WebSocketService : Service() {
         try {
             val json = org.json.JSONObject(text)
             when (json.optString("type")) {
-                "partner_update" -> {
-                    // Persist the partner JSON into DataStore so UI can observe via Flow
-                    val repo = SessionRepository(applicationContext)
-                    repo.saveCachedPartnerJson(text)
-                }
-                "partner_connected" -> {
-                    Log.d(TAG, "Partner connected")
-                    updateNotification("Partner online")
-                }
-                "partner_disconnected" -> {
-                    Log.d(TAG, "Partner disconnected")
-                    updateNotification("Connected")
-                }
+                "partner_update" -> SessionRepository(applicationContext).saveCachedPartnerJson(text)
+                "partner_connected" -> updateNotification("Partner online")
+                "partner_disconnected" -> updateNotification("Connected")
                 "signaling" -> {
-                    val payload = json.optJSONObject("payload")
-                    if (payload != null) {
-                        val type = payload.optString("type")
-                        if (type == "request_audio") {
-                            val repo = SessionRepository(applicationContext)
-                            val profile = repo.cachedProfileFlow.first()
-                            val hasPermission = ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
-                            if (profile?.shareLiveAudio == true && hasPermission) {
-                                Log.d(TAG, "Auto-starting audio streamer")
-                                ensureWebRtc()
-                                webRtcManager?.start(dev.og69.eab.webrtc.WebRtcManager.Role.STREAMER)
-                                updateNotification("Live Audio Stream Active")
-                            } else {
-                                Log.d(TAG, "Ignored request_audio: profile=${profile?.shareLiveAudio}, perm=$hasPermission")
-                                sendSignaling(org.json.JSONObject().apply {
-                                    put("type", "audio_disabled")
-                                    put("reason", if (profile?.shareLiveAudio != true) "disabled_in_profile" else "permission_missing")
-                                })
-                            }
-                        } else if (type == "stop_audio") {
-                            stopAudio()
-                        } else {
-                            webRtcManager?.onRemoteSignalingPayload(payload)
+                    val payload = json.optJSONObject("payload") ?: return
+                    val type = payload.optString("type")
+                    if (type == "request_audio") {
+                        val profile = SessionRepository(applicationContext).cachedProfileFlow.first()
+                        if (profile?.shareLiveAudio == true && ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+                            ensureWebRtc(); webRtcManager?.start(dev.og69.eab.webrtc.WebRtcManager.Role.STREAMER); updateNotification("Live Audio Active")
                         }
-                        signalingFlow.emit(payload)
-                    }
+                    } else if (type == "request_screen") {
+                        val profile = SessionRepository(applicationContext).cachedProfileFlow.first()
+                        if (profile?.shareScreenView == true) {
+                            if (screenCaptureIntent != null) {
+                                ensureWebRtc(); updateForegroundService("Screen Share Active"); scope.launch { delay(500); webRtcManager?.start(dev.og69.eab.webrtc.WebRtcManager.Role.SCREEN_STREAMER, screenCaptureIntent) }
+                            } else MainActivity.requestScreenCapture(this)
+                        }
+                    } else if (type == "request_media") {
+                        val profile = SessionRepository(applicationContext).cachedProfileFlow.first()
+                        val hasP = if (Build.VERSION.SDK_INT >= 33) {
+                            ContextCompat.checkSelfPermission(this, Manifest.permission.READ_MEDIA_IMAGES) == PackageManager.PERMISSION_GRANTED &&
+                            ContextCompat.checkSelfPermission(this, Manifest.permission.READ_MEDIA_VIDEO) == PackageManager.PERMISSION_GRANTED
+                        } else {
+                            ContextCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
+                        }
+                        if (profile?.shareMedia == true && hasP) {
+                            ensureWebRtc()
+                            val mgr = webRtcManager
+                            if (mgr?.role == WebRtcManager.Role.MEDIA_PROVIDER && mgr.state == WebRtcManager.State.CONNECTED) {
+                                // Already connected as provider, just resend the list
+                                sendMediaList()
+                            } else {
+                                mgr?.start(dev.og69.eab.webrtc.WebRtcManager.Role.MEDIA_PROVIDER)
+                            }
+                            mediaObserveJob?.cancel(); mediaObserveJob = scope.launch { mediaHelper?.observeMediaChanges()?.collect { sendMediaList() } }
+                        }
+                    } else if (type == "stop_audio") stopAudio()
+                    else if (type == "stop_screen") stopScreen()
+                    else if (type == "stop_media") actuallyStopMedia()
+                    else webRtcManager?.onRemoteSignalingPayload(payload)
+                    signalingFlow.emit(payload)
                 }
-                "pong" -> { /* keepalive response */ }
             }
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed to parse WS message: ${e.message}")
+        } catch (e: Exception) { /* ignored */ }
+    }
+
+    private fun ensureChannel() {
+        if (Build.VERSION.SDK_INT >= 26) {
+            val mgr = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            mgr.createNotificationChannel(NotificationChannel(CHANNEL_ID, "Live sync", NotificationManager.IMPORTANCE_LOW))
         }
     }
 
-    /* ── Notification helpers ─────────────────────────── */
-
-    private fun ensureChannel() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val mgr = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            val ch = NotificationChannel(
-                CHANNEL_ID,
-                "Live sync",
-                NotificationManager.IMPORTANCE_LOW,
-            ).apply {
-                description = "Keeps the real-time connection to your partner alive."
-                setShowBadge(false)
-            }
-            mgr.createNotificationChannel(ch)
-        }
+    private fun updateForegroundService(content: String) {
+        if (Build.VERSION.SDK_INT >= 29) {
+            var type = android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) type = type or 0x00000008
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) type = type or 0x00000080
+            if (screenCaptureIntent != null) type = type or 0x00000020
+            try { startForeground(NOTIF_ID, buildNotification(content), type) } catch (e: Exception) { startForeground(NOTIF_ID, buildNotification(content)) }
+        } else startForeground(NOTIF_ID, buildNotification(content))
     }
 
     private fun buildNotification(subtitle: String): Notification {
-        val pi = PendingIntent.getActivity(
-            this, 0,
-            Intent(this, MainActivity::class.java).apply {
-                flags = Intent.FLAG_ACTIVITY_SINGLE_TOP
-            },
-            PendingIntent.FLAG_IMMUTABLE,
-        )
-        return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_launcher_foreground)
-            .setContentTitle(getString(R.string.app_name))
-            .setContentText(subtitle)
-            .setOngoing(true)
-            .setOnlyAlertOnce(true)
-            .setContentIntent(pi)
-            .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
-            .build()
+        val pi = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java).apply { flags = Intent.FLAG_ACTIVITY_SINGLE_TOP }, PendingIntent.FLAG_IMMUTABLE)
+        return NotificationCompat.Builder(this, CHANNEL_ID).setSmallIcon(R.drawable.ic_launcher_foreground).setContentTitle(getString(R.string.app_name)).setContentText(subtitle).setOngoing(true).setContentIntent(pi).build()
     }
 
     private fun updateNotification(subtitle: String) {
-        try {
-            val mgr = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            mgr.notify(NOTIF_ID, buildNotification(subtitle))
-        } catch (_: Exception) { /* ignore if channel missing somehow */ }
+        (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).notify(NOTIF_ID, buildNotification(subtitle))
     }
 }

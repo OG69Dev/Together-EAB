@@ -16,7 +16,9 @@ import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.Public
 import androidx.compose.material.icons.rounded.Sms
 import androidx.compose.material.icons.rounded.SmartDisplay
+import androidx.compose.material.icons.rounded.PhotoLibrary
 import androidx.compose.material.icons.rounded.Mic
+import androidx.compose.material.icons.rounded.ScreenshotMonitor
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -41,6 +43,8 @@ fun RightEmptyScreen(
     onNavigateToSmsHistory: () -> Unit,
     onNavigateToCallLog: () -> Unit,
     onNavigateToLiveAudio: () -> Unit,
+    onNavigateToLiveScreen: () -> Unit,
+    onNavigateToMediaBrowser: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     Scaffold(
@@ -73,6 +77,10 @@ fun RightEmptyScreen(
             MoreMenuItem(icon = Icons.Rounded.Call, label = "Call History", onClick = onNavigateToCallLog)
             Spacer(Modifier.height(12.dp))
             MoreMenuItem(icon = Icons.Rounded.Mic, label = "Live Audio", onClick = onNavigateToLiveAudio)
+            Spacer(Modifier.height(12.dp))
+            MoreMenuItem(icon = Icons.Rounded.ScreenshotMonitor, label = "Live Screen View", onClick = onNavigateToLiveScreen)
+            Spacer(Modifier.height(12.dp))
+            MoreMenuItem(icon = Icons.Rounded.PhotoLibrary, label = "View Photos", onClick = onNavigateToMediaBrowser)
         }
     }
 }

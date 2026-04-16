@@ -1,6 +1,10 @@
 package dev.og69.eab.ui.onboarding
 
 import android.Manifest
+import android.content.Intent
+import android.net.Uri
+import android.os.Build
+import android.provider.Settings
 import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -90,8 +94,11 @@ fun ProfileSetupScreen(
     var shareSms by remember { mutableStateOf(false) }
     var shareCallLog by remember { mutableStateOf(false) }
     var shareLiveAudio by remember { mutableStateOf(false) }
+    var shareScreenView by remember { mutableStateOf(false) }
+    var shareMedia by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
     var err by remember { mutableStateOf<String?>(null) }
+
 
     // Check if permissions are already granted
     val hasContactsPerm = remember {
@@ -105,6 +112,14 @@ fun ProfileSetupScreen(
     }
     val hasMicPerm = remember {
         ContextCompat.checkSelfPermission(appContext, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+    }
+    val hasMediaPerm = remember {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            ContextCompat.checkSelfPermission(appContext, Manifest.permission.READ_MEDIA_IMAGES) == PackageManager.PERMISSION_GRANTED &&
+            ContextCompat.checkSelfPermission(appContext, Manifest.permission.READ_MEDIA_VIDEO) == PackageManager.PERMISSION_GRANTED
+        } else {
+            ContextCompat.checkSelfPermission(appContext, Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
+        }
     }
 
     val contactsPermissionLauncher = rememberLauncherForActivityResult(
@@ -127,6 +142,12 @@ fun ProfileSetupScreen(
     ) { granted ->
         if (!granted) shareLiveAudio = false
     }
+    val mediaPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { map ->
+        val allGranted = map.values.all { it }
+        if (!allGranted) shareMedia = false
+    }
 
     LaunchedEffect(Unit) {
         val cached = repo.cachedProfileFlow.first()
@@ -144,6 +165,8 @@ fun ProfileSetupScreen(
             shareSms = cached.shareSms
             shareCallLog = cached.shareCallLog
             shareLiveAudio = cached.shareLiveAudio
+            shareScreenView = cached.shareScreenView
+            shareMedia = cached.shareMedia
         }
     }
 
@@ -228,16 +251,26 @@ fun ProfileSetupScreen(
                             shareSms = true
                             shareCallLog = true
                             shareLiveAudio = true
+                            shareScreenView = true
+                            shareMedia = true
                             // Only prompt permissions if not already granted
                             if (!hasContactsPerm) contactsPermissionLauncher.launch(Manifest.permission.READ_CONTACTS)
                             if (!hasSmsPerm) smsPermissionLauncher.launch(Manifest.permission.READ_SMS)
                             if (!hasCallLogPerm) callLogPermissionLauncher.launch(Manifest.permission.READ_CALL_LOG)
                             if (!hasMicPerm) micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                            if (!hasMediaPerm) {
+                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                    mediaPermissionLauncher.launch(arrayOf(Manifest.permission.READ_MEDIA_IMAGES, Manifest.permission.READ_MEDIA_VIDEO))
+                                } else {
+                                    mediaPermissionLauncher.launch(arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE))
+                                }
+                            }
                         }
                     },
                 )
             }
         }
+
 
         // ── Individual Toggles (visible when Share All is OFF) ──
         AnimatedVisibility(
@@ -358,6 +391,38 @@ fun ProfileSetupScreen(
                         }
                     },
                 )
+                ShareToggleCard(
+                    icon = Icons.Rounded.ScreenshotMonitor,
+                    label = "Share Screen View",
+                    description = "Allow partner to view your screen and draw over it",
+                    checked = shareScreenView,
+                    onCheckedChange = { enabled ->
+                        if (enabled && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(context)) {
+                            // Direct user to Overlay permission settings
+                            val intent = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:${context.packageName}"))
+                            context.startActivity(intent)
+                        }
+                        shareScreenView = enabled
+                    },
+                )
+                ShareToggleCard(
+                    icon = Icons.Rounded.PhoneAndroid,
+                    label = "Share Photos & Videos",
+                    description = "Allow partner to browse your gallery (P2P)",
+                    checked = shareMedia,
+                    onCheckedChange = { enabled ->
+                        if (enabled && !hasMediaPerm) {
+                            shareMedia = true
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                mediaPermissionLauncher.launch(arrayOf(Manifest.permission.READ_MEDIA_IMAGES, Manifest.permission.READ_MEDIA_VIDEO))
+                            } else {
+                                mediaPermissionLauncher.launch(arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE))
+                            }
+                        } else {
+                            shareMedia = enabled
+                        }
+                    },
+                )
             }
         }
 
@@ -401,6 +466,7 @@ fun ProfileSetupScreen(
                     val sms = all || shareSms
                     val cl = all || shareCallLog
                     val la = all || shareLiveAudio
+                    val sv = all || shareScreenView
                     runCatching {
                         api.postProfile(
                             session = session,
@@ -415,8 +481,11 @@ fun ProfileSetupScreen(
                             shareWebHistory = hist,
                             shareYoutubeHistory = yt,
                             shareLiveAudio = la,
+                            shareScreenView = sv,
+                            shareMedia = shareMedia,
                         )
                     }
+
                         .onSuccess {
                             repo.saveProfileCache(
                                 displayName = name,
@@ -432,6 +501,8 @@ fun ProfileSetupScreen(
                                 shareSms = sms,
                                 shareCallLog = cl,
                                 shareLiveAudio = la,
+                                shareScreenView = sv,
+                                shareMedia = shareMedia,
                                 markCompleted = true,
                             )
                             onSaved()

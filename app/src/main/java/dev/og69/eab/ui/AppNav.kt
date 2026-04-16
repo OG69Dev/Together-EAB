@@ -22,6 +22,9 @@ import dev.og69.eab.ui.dashboard.SmsConversationScreen
 import dev.og69.eab.ui.dashboard.CallLogScreen
 import dev.og69.eab.ui.dashboard.YoutubeHistoryScreen
 import dev.og69.eab.ui.dashboard.LiveAudioScreen
+import dev.og69.eab.ui.dashboard.LiveScreenViewScreen
+import dev.og69.eab.ui.dashboard.MediaBrowserScreen
+import dev.og69.eab.ui.dashboard.MediaDetailScreen
 import java.net.URLDecoder
 import java.net.URLEncoder
 
@@ -115,6 +118,12 @@ fun AppNav(modifier: Modifier = Modifier) {
                 onNavigateToLiveAudio = {
                     nav.navigate("live_audio")
                 },
+                onNavigateToLiveScreen = {
+                    nav.navigate("live_screen")
+                },
+                onNavigateToMediaBrowser = {
+                    nav.navigate("media_browser")
+                },
             )
         }
         composable("contacts") {
@@ -149,6 +158,24 @@ fun AppNav(modifier: Modifier = Modifier) {
         }
         composable("live_audio") {
             LiveAudioScreen(onBack = { nav.popBackStack() })
+        }
+        composable("live_screen") {
+            LiveScreenViewScreen(onBack = { nav.popBackStack() })
+        }
+        composable("media_browser") {
+            MediaBrowserScreen(
+                onBack = { nav.popBackStack() },
+                onOpenItem = { id ->
+                    nav.navigate("media_detail/$id")
+                }
+            )
+        }
+        composable("media_detail/{mediaId}") { backStackEntry ->
+            val id = backStackEntry.arguments?.getString("mediaId")?.toLongOrNull() ?: -1L
+            MediaDetailScreen(
+                mediaId = id,
+                onBack = { nav.popBackStack() }
+            )
         }
     }
 }
