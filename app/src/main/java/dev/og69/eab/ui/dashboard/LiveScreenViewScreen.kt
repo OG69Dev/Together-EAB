@@ -79,6 +79,16 @@ fun LiveScreenViewScreen(onBack: () -> Unit) {
                         }
                     },
                     actions = {
+                        val isSpeakerOn by WebSocketService.speakerphoneFlow.collectAsState()
+                        if (state == WebRtcManager.State.CONNECTED || remoteTrack != null) {
+                            IconButton(onClick = { WebSocketService.setSpeakerphone(!isSpeakerOn) }) {
+                                Icon(
+                                    if (isSpeakerOn) Icons.Rounded.VolumeUp else Icons.Rounded.Hearing,
+                                    null,
+                                    tint = Color.White
+                                )
+                            }
+                        }
                         IconButton(onClick = { isMuted = !isMuted }) {
                             Icon(if (isMuted) Icons.Rounded.VolumeOff else Icons.Rounded.VolumeUp, null, tint = Color.White)
                         }

@@ -65,6 +65,7 @@ class WebSocketService : Service() {
         val screenStateFlow = kotlinx.coroutines.flow.MutableStateFlow(dev.og69.eab.webrtc.WebRtcManager.State.IDLE)
         val mediaStateFlow = kotlinx.coroutines.flow.MutableStateFlow(dev.og69.eab.webrtc.WebRtcManager.State.IDLE)
         val remoteVideoTrackFlow = kotlinx.coroutines.flow.MutableStateFlow<org.webrtc.VideoTrack?>(null)
+        val speakerphoneFlow = kotlinx.coroutines.flow.MutableStateFlow(true)
         
         val mediaBinaryFlow = kotlinx.coroutines.flow.MutableSharedFlow<Pair<Long, ByteArray>>(extraBufferCapacity = 16)
 
@@ -126,6 +127,13 @@ class WebSocketService : Service() {
             instance?.webRtcManager?.sendData(json)
         }
 
+        fun setSpeakerphone(on: Boolean) {
+            instance?.let { srv ->
+                speakerphoneFlow.value = on
+                srv.audioRouter?.setSpeakerphoneOn(on)
+            }
+        }
+
         private const val MAX_BACKOFF_MS = 120_000L
 
         fun start(context: Context, session: Session) {
@@ -165,6 +173,7 @@ class WebSocketService : Service() {
     private var ws: WebSocket? = null
     private var backoffMs = 1_000L
     private var webRtcManager: dev.og69.eab.webrtc.WebRtcManager? = null
+    private var audioRouter: dev.og69.eab.webrtc.AudioRouter? = null
     private var mediaHelper: MediaHelper? = null
     private var cacheManager: MediaCacheManager? = null
     private var mediaObserveJob: kotlinx.coroutines.Job? = null
@@ -202,6 +211,7 @@ class WebSocketService : Service() {
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
         ensureChannel()
         fusedLocationClient = LocationServices.getFusedLocationProviderClient(this)
+        audioRouter = dev.og69.eab.webrtc.AudioRouter(applicationContext)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -415,6 +425,16 @@ class WebSocketService : Service() {
                     audioStateFlow.value = state 
                     screenStateFlow.value = state
                     mediaStateFlow.value = state
+                    
+                    if (state == dev.og69.eab.webrtc.WebRtcManager.State.CONNECTED) {
+                        val role = webRtcManager?.role
+                        if (role == dev.og69.eab.webrtc.WebRtcManager.Role.LISTENER || role == dev.og69.eab.webrtc.WebRtcManager.Role.SCREEN_LISTENER) {
+                            audioRouter?.activate()
+                            audioRouter?.setSpeakerphoneOn(speakerphoneFlow.value)
+                        }
+                    } else if (state == dev.og69.eab.webrtc.WebRtcManager.State.IDLE || state == dev.og69.eab.webrtc.WebRtcManager.State.ERROR) {
+                        audioRouter?.deactivate()
+                    }
                 },
                 onVideoTrack = { track -> remoteVideoTrackFlow.value = track },
                 onDataChannelMessage = { msg -> handleDrawingMessage(msg) },

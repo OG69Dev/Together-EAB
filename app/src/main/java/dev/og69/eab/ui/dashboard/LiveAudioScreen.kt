@@ -8,8 +8,10 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.Headset
+import androidx.compose.material.icons.rounded.Hearing
 import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.Stop
+import androidx.compose.material.icons.rounded.VolumeUp
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -50,6 +52,8 @@ fun LiveAudioScreen(onBack: () -> Unit) {
         label = "statusColor"
     )
 
+    val isSpeakerOn by WebSocketService.speakerphoneFlow.collectAsState()
+
     Scaffold(
         topBar = {
             CenterAlignedTopAppBar(
@@ -57,6 +61,17 @@ fun LiveAudioScreen(onBack: () -> Unit) {
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(androidx.compose.material.icons.Icons.Rounded.Headset, contentDescription = "Back")
+                    }
+                },
+                actions = {
+                    if (state == WebRtcManager.State.CONNECTED) {
+                        IconButton(onClick = { WebSocketService.setSpeakerphone(!isSpeakerOn) }) {
+                            Icon(
+                                if (isSpeakerOn) Icons.Rounded.VolumeUp else Icons.Rounded.Hearing,
+                                contentDescription = "Toggle Speakerphone",
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                        }
                     }
                 },
                 colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
