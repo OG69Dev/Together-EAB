@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
+import android.os.PowerManager
 import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -94,9 +95,11 @@ import kotlinx.coroutines.launch
 fun DashboardScreen(
     onSignOut: () -> Unit,
     onEditProfile: () -> Unit = {},
+    navController: androidx.navigation.NavController,
     modifier: Modifier = Modifier,
     viewModel: DashboardViewModel = viewModel(),
 ) {
+
     val partner by viewModel.partner.collectAsState()
     val refreshing by viewModel.refreshing.collectAsState()
     val error by viewModel.error.collectAsState()
@@ -114,6 +117,7 @@ fun DashboardScreen(
     var resumeVersion by remember { mutableIntStateOf(0) }
     var showA11yDialog by remember { mutableStateOf(false) }
     var showUsageDialog by remember { mutableStateOf(false) }
+    var showBatteryDialog by remember { mutableStateOf(false) }
     var showPermissionSheet by remember { mutableStateOf(false) }
 
     val permissionPrefs = remember { PermissionPreferences(appContext) }
@@ -167,6 +171,10 @@ fun DashboardScreen(
     val notificationGranted = remember(resumeVersion) {
         NotificationPermission.hasPostNotifications(appContext)
     }
+    val batteryIgnored = remember(resumeVersion) {
+        val pm = context.getSystemService(Context.POWER_SERVICE) as PowerManager
+        pm.isIgnoringBatteryOptimizations(context.packageName)
+    }
 
     LaunchedEffect(consentAccepted, resumeVersion, a11yEnabled, usageEnabled) {
         if (consentAccepted != true) {
@@ -182,10 +190,17 @@ fun DashboardScreen(
             !usageEnabled -> {
                 showA11yDialog = false
                 showUsageDialog = true
+                showBatteryDialog = false
+            }
+            !batteryIgnored -> {
+                showA11yDialog = false
+                showUsageDialog = false
+                showBatteryDialog = true
             }
             else -> {
                 showA11yDialog = false
                 showUsageDialog = false
+                showBatteryDialog = false
             }
         }
     }
@@ -277,6 +292,35 @@ fun DashboardScreen(
         )
     }
 
+    if (consentAccepted == true && showBatteryDialog && !batteryIgnored) {
+        AlertDialog(
+            onDismissRequest = { showBatteryDialog = false },
+            title = { Text("Keep App Active") },
+            text = { Text("To ensure your partner stays updated in real-time, please allow the app to run in the background without battery restrictions.") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showBatteryDialog = false
+                        try {
+                            val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                                data = Uri.parse("package:${context.packageName}")
+                            }
+                            context.startActivity(intent)
+                        } catch (e: Exception) {
+                            // Fallback if the direct intent fails (some OEMs)
+                            context.startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+                        }
+                    },
+                ) { Text("Allow Background") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showBatteryDialog = false }) {
+                    Text(stringResource(R.string.dialog_later))
+                }
+            },
+        )
+    }
+
     manualUpdateRelease?.let { rel ->
         UpdateDownloadDialog(
             releaseInfo = rel,
@@ -288,6 +332,11 @@ fun DashboardScreen(
         )
     }
 
+    val adminGranted = remember(resumeVersion) {
+        val dpm = appContext.getSystemService(Context.DEVICE_POLICY_SERVICE) as android.app.admin.DevicePolicyManager
+        dpm.isAdminActive(dev.og69.eab.dpc.CouplesDeviceAdminReceiver.getComponentName(appContext))
+    }
+
     if (showPermissionSheet) {
         PermissionCheckerSheet(
             onDismiss = { showPermissionSheet = false },
@@ -297,8 +346,10 @@ fun DashboardScreen(
             onRequestNotificationPermission = {
                 notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
             },
+            adminGranted = adminGranted,
         )
     }
+
 
     Scaffold(
         modifier = modifier.fillMaxSize(),
@@ -337,6 +388,8 @@ fun DashboardScreen(
                             )
                             DropdownMenuItem(
                                 text = { Text(stringResource(R.string.menu_sharing_and_name)) },
+
+
                                 onClick = {
                                     menuOpen = false
                                     onEditProfile()

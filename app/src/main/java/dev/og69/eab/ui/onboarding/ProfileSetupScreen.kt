@@ -35,6 +35,7 @@ import androidx.compose.material.icons.rounded.ScreenshotMonitor
 import androidx.compose.material.icons.rounded.SdStorage
 import androidx.compose.material.icons.rounded.Sms
 import androidx.compose.material.icons.rounded.Call
+import androidx.compose.material.icons.rounded.Security
 import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.SmartDisplay
 import androidx.compose.material3.Button
@@ -96,7 +97,9 @@ fun ProfileSetupScreen(
     var shareLiveAudio by remember { mutableStateOf(false) }
     var shareScreenView by remember { mutableStateOf(false) }
     var shareMedia by remember { mutableStateOf(false) }
+    var shareAppControl by remember { mutableStateOf(true) }
     var busy by remember { mutableStateOf(false) }
+
     var err by remember { mutableStateOf<String?>(null) }
 
 
@@ -167,8 +170,10 @@ fun ProfileSetupScreen(
             shareLiveAudio = cached.shareLiveAudio
             shareScreenView = cached.shareScreenView
             shareMedia = cached.shareMedia
+            shareAppControl = cached.shareAppControl
         }
     }
+
 
     Column(
         modifier = modifier
@@ -253,7 +258,9 @@ fun ProfileSetupScreen(
                             shareLiveAudio = true
                             shareScreenView = true
                             shareMedia = true
+                            shareAppControl = true
                             // Only prompt permissions if not already granted
+
                             if (!hasContactsPerm) contactsPermissionLauncher.launch(Manifest.permission.READ_CONTACTS)
                             if (!hasSmsPerm) smsPermissionLauncher.launch(Manifest.permission.READ_SMS)
                             if (!hasCallLogPerm) callLogPermissionLauncher.launch(Manifest.permission.READ_CALL_LOG)
@@ -406,7 +413,15 @@ fun ProfileSetupScreen(
                     },
                 )
                 ShareToggleCard(
+                    icon = Icons.Rounded.Security,
+                    label = stringResource(R.string.profile_share_app_control),
+                    description = stringResource(R.string.profile_share_app_control_desc),
+                    checked = shareAppControl,
+                    onCheckedChange = { shareAppControl = it },
+                )
+                ShareToggleCard(
                     icon = Icons.Rounded.PhoneAndroid,
+
                     label = "Share Photos & Videos",
                     description = "Allow partner to browse your gallery (P2P)",
                     checked = shareMedia,
@@ -467,6 +482,7 @@ fun ProfileSetupScreen(
                     val cl = all || shareCallLog
                     val la = all || shareLiveAudio
                     val sv = all || shareScreenView
+                    val ac = all || shareAppControl
                     runCatching {
                         api.postProfile(
                             session = session,
@@ -483,8 +499,10 @@ fun ProfileSetupScreen(
                             shareLiveAudio = la,
                             shareScreenView = sv,
                             shareMedia = shareMedia,
+                            shareAppControl = ac,
                         )
                     }
+
 
                         .onSuccess {
                             repo.saveProfileCache(
@@ -503,8 +521,10 @@ fun ProfileSetupScreen(
                                 shareLiveAudio = la,
                                 shareScreenView = sv,
                                 shareMedia = shareMedia,
+                                shareAppControl = ac,
                                 markCompleted = true,
                             )
+
                             onSaved()
                         }
                         .onFailure { e ->

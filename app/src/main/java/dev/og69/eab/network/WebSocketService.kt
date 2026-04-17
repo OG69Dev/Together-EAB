@@ -53,7 +53,10 @@ class WebSocketService : Service() {
     companion object {
         private const val TAG = "WebSocketService"
         private const val CHANNEL_ID = "eab_sync"
+        private const val CHANNEL_ALERTS_ID = "eab_alerts"
         private const val NOTIF_ID = 9001
+        private const val NOTIF_ID_ALERT = 9002
+
         private const val EXTRA_COUPLE_ID = "couple_id"
         private const val EXTRA_DEVICE_TOKEN = "device_token"
 
@@ -145,7 +148,17 @@ class WebSocketService : Service() {
             stop(context)
             start(context, session)
         }
+
+        fun sendAppBlockAttempt(appLabel: String) {
+            instance?.let { srv ->
+                srv.sendSignaling(org.json.JSONObject().apply {
+                    put("type", "app_block_attempt")
+                    put("app_label", appLabel)
+                })
+            }
+        }
     }
+
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val running = AtomicBoolean(false)
@@ -171,6 +184,8 @@ class WebSocketService : Service() {
 
     private lateinit var windowManager: WindowManager
     private var canvasView: DrawingCanvasView? = null
+    private val api by lazy { CoupleApi(client) }
+
 
     private val client by lazy {
         OkHttpClient.Builder()
@@ -201,8 +216,33 @@ class WebSocketService : Service() {
             connect()
         }
         startLocationTracking()
+
+        // IMMEDIATE POLICY APPLICATION (from cache)
+        scope.launch {
+            val repo = SessionRepository(applicationContext)
+            val blocked = repo.getBlockedPackages()
+            val uninstall = repo.uninstallBlockedFlow.first()
+            
+            // Re-apply uninstall block to DPC
+            dev.og69.eab.dpc.CouplesDeviceAdminReceiver.setUninstallBlocked(
+                applicationContext,
+                packageName,
+                uninstall
+            )
+            // The AccessibilityService monitors blockedPackagesFlow automatically
+        }
+
         return START_STICKY
     }
+
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        super.onTaskRemoved(rootIntent)
+        // Send restart broadcast to ourselves
+        val restartIntent = Intent("dev.og69.eab.RESTART_SYNC")
+        restartIntent.setPackage(packageName)
+        sendBroadcast(restartIntent)
+    }
+
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -384,9 +424,13 @@ class WebSocketService : Service() {
                     if (webRtcManager?.role == dev.og69.eab.webrtc.WebRtcManager.Role.MEDIA_PROVIDER) {
                         sendMediaList() 
                     }
+                },
+                fetchIceServers = {
+                    api.getIceServers(Session(coupleId, "", deviceToken))
                 }
             )
         }
+
         if (mediaHelper == null) mediaHelper = MediaHelper(applicationContext)
         if (cacheManager == null) cacheManager = MediaCacheManager(applicationContext)
     }
@@ -576,7 +620,31 @@ class WebSocketService : Service() {
             val json = org.json.JSONObject(text)
             when (json.optString("type")) {
                 "partner_update" -> SessionRepository(applicationContext).saveCachedPartnerJson(text)
+                "app_control_updated" -> {
+                    // Sync our own (self) app control policy
+                    val repo = SessionRepository(applicationContext)
+                    val api = CoupleApi()
+                    val session = repo.getSession()
+                    if (session != null) {
+                        scope.launch {
+                            try {
+                                val control = api.getSelfAppControl(session)
+                                repo.saveBlockedPackages(control.blockedPackages.toSet())
+                                repo.saveUninstallBlocked(control.uninstallBlocked)
+                                // Apply uninstall block to DPC
+                                dev.og69.eab.dpc.CouplesDeviceAdminReceiver.setUninstallBlocked(
+                                    applicationContext,
+                                    packageName,
+                                    control.uninstallBlocked
+                                )
+                            } catch (e: Exception) {
+                                e.printStackTrace()
+                            }
+                        }
+                    }
+                }
                 "partner_connected" -> updateNotification("Partner online")
+
                 "partner_disconnected" -> updateNotification("Connected")
                 "signaling" -> {
                     val payload = json.optJSONObject("payload") ?: return
@@ -615,7 +683,12 @@ class WebSocketService : Service() {
                     } else if (type == "stop_audio") stopAudio()
                     else if (type == "stop_screen") stopScreen()
                     else if (type == "stop_media") actuallyStopMedia()
+                    else if (type == "app_block_attempt") {
+                        val appLabel = payload.optString("app_label", "an app")
+                        showAlertNotification("Partner tried to open $appLabel")
+                    }
                     else webRtcManager?.onRemoteSignalingPayload(payload)
+
                     signalingFlow.emit(payload)
                 }
             }
@@ -626,8 +699,10 @@ class WebSocketService : Service() {
         if (Build.VERSION.SDK_INT >= 26) {
             val mgr = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             mgr.createNotificationChannel(NotificationChannel(CHANNEL_ID, "Live sync", NotificationManager.IMPORTANCE_LOW))
+            mgr.createNotificationChannel(NotificationChannel(CHANNEL_ALERTS_ID, "Alerts", NotificationManager.IMPORTANCE_HIGH))
         }
     }
+
 
     private fun updateForegroundService(content: String) {
         if (Build.VERSION.SDK_INT >= 29) {
@@ -647,4 +722,20 @@ class WebSocketService : Service() {
     private fun updateNotification(subtitle: String) {
         (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).notify(NOTIF_ID, buildNotification(subtitle))
     }
+
+    private fun showAlertNotification(content: String) {
+        val mgr = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        val pi = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java).apply { flags = Intent.FLAG_ACTIVITY_SINGLE_TOP }, PendingIntent.FLAG_IMMUTABLE)
+        val notif = NotificationCompat.Builder(this, CHANNEL_ALERTS_ID)
+            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setContentTitle("App Control Alert")
+            .setContentText(content)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setDefaults(Notification.DEFAULT_ALL)
+            .setAutoCancel(true)
+            .setContentIntent(pi)
+            .build()
+        mgr.notify(NOTIF_ID_ALERT, notif)
+    }
 }
+

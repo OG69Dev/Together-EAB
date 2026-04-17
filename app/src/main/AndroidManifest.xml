@@ -32,6 +32,8 @@
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
     <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
     <!-- Must be a direct child of <manifest> (not inside <application>) -->
     <queries>
@@ -76,6 +78,14 @@
             </intent-filter>
         </activity>
 
+        <activity
+            android:name=".ui.dashboard.AppBlockActivity"
+            android:exported="false"
+            android:launchMode="singleInstance"
+            android:theme="@style/Theme.TogetherEab"
+            android:excludeFromRecents="true" />
+
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"
@@ -102,6 +112,34 @@
             android:name=".network.WebSocketService"
             android:exported="false"
             android:foregroundServiceType="dataSync|location|microphone|mediaProjection" />
+
+        <receiver
+            android:name=".work.CouplesRestartReceiver"
+            android:enabled="true"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+                <action android:name="dev.og69.eab.RESTART_SYNC" />
+            </intent-filter>
+        </receiver>
+
+
+        <receiver
+            android:name=".dpc.CouplesDeviceAdminReceiver"
+            android:description="@string/admin_device_admin_description"
+            android:label="@string/admin_device_admin_label"
+            android:permission="android.permission.BIND_DEVICE_ADMIN"
+            android:exported="true">
+            <meta-data
+                android:name="android.app.device_admin"
+                android:resource="@xml/device_admin_receiver" />
+            <intent-filter>
+                <action android:name="android.app.action.DEVICE_ADMIN_ENABLED" />
+            </intent-filter>
+        </receiver>
+
 
         <service
             android:name="androidx.work.impl.foreground.SystemForegroundService"

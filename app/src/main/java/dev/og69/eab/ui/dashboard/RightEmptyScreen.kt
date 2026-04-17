@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.rounded.Call
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.Public
@@ -45,8 +46,10 @@ fun RightEmptyScreen(
     onNavigateToLiveAudio: () -> Unit,
     onNavigateToLiveScreen: () -> Unit,
     onNavigateToMediaBrowser: () -> Unit,
+    onNavigateToAppControl: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -81,9 +84,12 @@ fun RightEmptyScreen(
             MoreMenuItem(icon = Icons.Rounded.ScreenshotMonitor, label = "Live Screen View", onClick = onNavigateToLiveScreen)
             Spacer(Modifier.height(12.dp))
             MoreMenuItem(icon = Icons.Rounded.PhotoLibrary, label = "View Photos", onClick = onNavigateToMediaBrowser)
+            Spacer(Modifier.height(12.dp))
+            MoreMenuItem(icon = Icons.Default.Security, label = "App Control", onClick = onNavigateToAppControl)
         }
     }
 }
+
 
 @Composable
 private fun MoreMenuItem(

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<device-admin>
+    <receiver-name>@string/admin_device_admin_label</receiver-name>
+    <description>@string/admin_device_admin_description</description>
+    <uses-policies>
+        <force-lock />
+        <limit-password />
+        <watch-login />
+        <reset-password />
+    </uses-policies>
+</device-admin>

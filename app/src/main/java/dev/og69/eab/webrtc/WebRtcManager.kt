@@ -5,6 +5,8 @@ import android.media.projection.MediaProjection
 import android.util.Log
 import org.json.JSONObject
 import org.webrtc.*
+import kotlinx.coroutines.*
+
 
 class WebRtcManager(
     private val context: Context,
@@ -14,12 +16,26 @@ class WebRtcManager(
     private val onDataChannelMessage: (String) -> Unit = {},
     private val onMediaBinaryMessage: (ByteArray) -> Unit = {},
     private val onMediaJsonMessage: (String) -> Unit = {},
-    private val onMediaChannelOpen: () -> Unit = {}
+    private val onMediaChannelOpen: () -> Unit = {},
+    private val fetchIceServers: suspend () -> List<dev.og69.eab.network.IceServerConfig> = { emptyList() }
 ) {
+
     enum class State { IDLE, CONNECTING, CONNECTED, DISCONNECTED, ERROR }
     companion object {
         private const val TAG = "WebRtcManager"
-        private const val STUN_SERVER = "stun:stun.l.google.com:19302"
+        private const val DEFAULT_STUN = "stun:stun.l.google.com:19302"
+
+
+        fun isEmulator(): Boolean {
+            return (android.os.Build.FINGERPRINT.startsWith("generic")
+                    || android.os.Build.FINGERPRINT.startsWith("unknown")
+                    || android.os.Build.MODEL.contains("google_sdk")
+                    || android.os.Build.MODEL.contains("Emulator")
+                    || android.os.Build.MODEL.contains("Android SDK built for x86")
+                    || android.os.Build.MANUFACTURER.contains("Genymotion")
+                    || (android.os.Build.BRAND.startsWith("generic") && android.os.Build.DEVICE.startsWith("generic"))
+                    || "google_sdk" == android.os.Build.PRODUCT)
+        }
     }
 
     enum class Role { LISTENER, STREAMER, SCREEN_LISTENER, SCREEN_STREAMER, MEDIA_PROVIDER, MEDIA_CONSUMER }
@@ -38,6 +54,8 @@ class WebRtcManager(
     var role: Role = Role.LISTENER
     private var videoCapturer: VideoCapturer? = null
     private var surfaceTextureHelper: SurfaceTextureHelper? = null
+    private val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main + kotlinx.coroutines.SupervisorJob())
+
     
     var state: State = State.IDLE
         private set
@@ -55,8 +73,17 @@ class WebRtcManager(
     }
 
     private fun createPeerConnectionFactory(): PeerConnectionFactory {
-        val encoderFactory = SoftwareVideoEncoderFactory()
-        val decoderFactory = SoftwareVideoDecoderFactory()
+        val encoderFactory: VideoEncoderFactory
+        val decoderFactory: VideoDecoderFactory
+
+        if (isEmulator()) {
+            Log.d(TAG, "Emulator detected: Forcing Software Video Encoding to fix black screen issue")
+            encoderFactory = SoftwareVideoEncoderFactory()
+            decoderFactory = SoftwareVideoDecoderFactory()
+        } else {
+            encoderFactory = DefaultVideoEncoderFactory(eglBase.eglBaseContext, true, true)
+            decoderFactory = DefaultVideoDecoderFactory(eglBase.eglBaseContext)
+        }
 
         return PeerConnectionFactory.builder()
             .setOptions(PeerConnectionFactory.Options())
@@ -69,98 +96,127 @@ class WebRtcManager(
         this.role = role
         state = State.CONNECTING
         onStateChange(State.CONNECTING)
-        Log.d(TAG, "Starting WebRtcManager as $role")
-        
-        val iceServers = listOf(
-            PeerConnection.IceServer.builder(STUN_SERVER).createIceServer()
-        )
-        
-        val rtcConfig = PeerConnection.RTCConfiguration(iceServers).apply {
-            sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
-        }
 
-        peerConnection = peerConnectionFactory?.createPeerConnection(rtcConfig, object : PeerConnection.Observer {
-            override fun onIceCandidate(candidate: IceCandidate) {
-                Log.d(TAG, "onIceCandidate: $candidate")
-                val json = JSONObject().apply {
-                    put("type", "candidate")
-                    put("label", candidate.sdpMLineIndex)
-                    put("id", candidate.sdpMid)
-                    put("candidate", candidate.sdp)
+        scope.launch {
+            Log.d(TAG, "Starting WebRtcManager as $role (gathering ICE...)")
+            
+            // 1. Start with Default STUN
+            val iceServers = mutableListOf(
+                PeerConnection.IceServer.builder(DEFAULT_STUN).createIceServer()
+            )
+            
+            // 2. Fetch Partner/Relay Servers (TURN) from Worker
+            try {
+                val turnConfigs = fetchIceServers()
+                for (config in turnConfigs) {
+                    val builder = PeerConnection.IceServer.builder(config.urls)
+                    if (config.username != null) builder.setUsername(config.username)
+                    if (config.credential != null) builder.setPassword(config.credential)
+                    iceServers.add(builder.createIceServer())
                 }
-                onSignalingMessage(json)
+                Log.d(TAG, "Added ${turnConfigs.size} TURN servers to configuration")
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to fetch TURN servers, proceeding with STUN-only", e)
             }
 
-            override fun onIceCandidatesRemoved(candidates: Array<out IceCandidate>?) {}
-            override fun onSignalingChange(state: PeerConnection.SignalingState?) {}
-            override fun onIceConnectionChange(iceState: PeerConnection.IceConnectionState?) {
-                Log.d(TAG, "onIceConnectionChange: $iceState")
-                when (iceState) {
-                    PeerConnection.IceConnectionState.CONNECTED -> {
-                        state = State.CONNECTED
-                        onStateChange(State.CONNECTED)
+            val rtcConfig = PeerConnection.RTCConfiguration(iceServers).apply {
+                sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
+                // ICE gathering policy. WebRTC defaults to ALL (including relay if available).
+                // "Fallback" behavior is handled by ICE scoring (P2P first, Relay last).
+                continualGatheringPolicy = PeerConnection.ContinualGatheringPolicy.GATHER_CONTINUALLY
+                
+                // OPTIMIZATIONS for P2P Priority:
+                iceCandidatePoolSize = 10 // Pre-gather candidates to speed up P2P establishment
+                bundlePolicy = PeerConnection.BundlePolicy.MAXBUNDLE // Keep everything on one port
+                rtcpMuxPolicy = PeerConnection.RtcpMuxPolicy.REQUIRE // Ensure RTCP muxing
+                tcpCandidatePolicy = PeerConnection.TcpCandidatePolicy.DISABLED // Prefer UDP for faster P2P discovery
+            }
+
+
+            peerConnection = peerConnectionFactory?.createPeerConnection(rtcConfig, object : PeerConnection.Observer {
+                override fun onIceCandidate(candidate: IceCandidate) {
+                    Log.d(TAG, "onIceCandidate: $candidate")
+                    val json = JSONObject().apply {
+                        put("type", "candidate")
+                        put("label", candidate.sdpMLineIndex)
+                        put("id", candidate.sdpMid)
+                        put("candidate", candidate.sdp)
                     }
-                    PeerConnection.IceConnectionState.DISCONNECTED -> {
-                        state = State.DISCONNECTED
-                        onStateChange(State.DISCONNECTED)
-                    }
-                    PeerConnection.IceConnectionState.FAILED -> {
-                        state = State.ERROR
-                        onStateChange(State.ERROR)
-                    }
-                    else -> {}
+                    onSignalingMessage(json)
                 }
-            }
-            override fun onIceConnectionReceivingChange(receiving: Boolean) {}
-            override fun onIceGatheringChange(state: PeerConnection.IceGatheringState?) {}
-            override fun onConnectionChange(state: PeerConnection.PeerConnectionState?) {
-                Log.d(TAG, "onConnectionChange: $state")
-            }
-            override fun onRenegotiationNeeded() {
-                Log.d(TAG, "onRenegotiationNeeded")
-                if (role == Role.STREAMER || role == Role.SCREEN_STREAMER || role == Role.MEDIA_PROVIDER) {
-                    createOffer()
-                }
-            }
-            override fun onAddTrack(receiver: RtpReceiver?, streams: Array<out MediaStream>?) {
-                Log.d(TAG, "onAddTrack")
-            }
-            override fun onTrack(transceiver: RtpTransceiver?) {
-                super.onTrack(transceiver)
-                val track = transceiver?.receiver?.track()
-                Log.d(TAG, "onTrack: ${track?.kind()}")
-                if (track is VideoTrack) {
-                    remoteVideoTrack = track
-                    onVideoTrack(track)
-                }
-            }
-            override fun onDataChannel(channel: DataChannel?) {
-                Log.d(TAG, "onDataChannel: ${channel?.label()}")
-                if (channel?.label() == "media") {
-                    mediaChannel = channel
-                    setupMediaChannel()
-                } else {
-                    dataChannel = channel
-                    setupDataChannel()
-                }
-            }
-            override fun onAddStream(stream: MediaStream?) {}
-            override fun onRemoveStream(stream: MediaStream?) {}
-        })
 
-        if (role == Role.SCREEN_STREAMER || role == Role.STREAMER || role == Role.MEDIA_PROVIDER) {
-            setupDataChannelInitiator()
-        }
+                override fun onIceCandidatesRemoved(candidates: Array<out IceCandidate>?) {}
+                override fun onSignalingChange(state: PeerConnection.SignalingState?) {}
+                override fun onIceConnectionChange(iceState: PeerConnection.IceConnectionState?) {
+                    Log.d(TAG, "onIceConnectionChange: $iceState")
+                    when (iceState) {
+                        PeerConnection.IceConnectionState.CONNECTED -> {
+                            state = State.CONNECTED
+                            onStateChange(State.CONNECTED)
+                        }
+                        PeerConnection.IceConnectionState.DISCONNECTED -> {
+                            state = State.DISCONNECTED
+                            onStateChange(State.DISCONNECTED)
+                        }
+                        PeerConnection.IceConnectionState.FAILED -> {
+                            state = State.ERROR
+                            onStateChange(State.ERROR)
+                        }
+                        else -> {}
+                    }
+                }
+                override fun onIceConnectionReceivingChange(receiving: Boolean) {}
+                override fun onIceGatheringChange(state: PeerConnection.IceGatheringState?) {}
+                override fun onConnectionChange(state: PeerConnection.PeerConnectionState?) {
+                    Log.d(TAG, "onConnectionChange: $state")
+                }
+                override fun onRenegotiationNeeded() {
+                    Log.d(TAG, "onRenegotiationNeeded")
+                    if (this@WebRtcManager.role == Role.STREAMER || this@WebRtcManager.role == Role.SCREEN_STREAMER || this@WebRtcManager.role == Role.MEDIA_PROVIDER) {
+                        createOffer()
+                    }
+                }
+                override fun onAddTrack(receiver: RtpReceiver?, streams: Array<out MediaStream>?) {
+                    Log.d(TAG, "onAddTrack")
+                }
+                override fun onTrack(transceiver: RtpTransceiver?) {
+                    super.onTrack(transceiver)
+                    val track = transceiver?.receiver?.track()
+                    Log.d(TAG, "onTrack: ${track?.kind()}")
+                    if (track is VideoTrack) {
+                        remoteVideoTrack = track
+                        onVideoTrack(track)
+                    }
+                }
+                override fun onDataChannel(channel: DataChannel?) {
+                    Log.d(TAG, "onDataChannel: ${channel?.label()}")
+                    if (channel?.label() == "media") {
+                        mediaChannel = channel
+                        setupMediaChannel()
+                    } else {
+                        dataChannel = channel
+                        setupDataChannel()
+                    }
+                }
+                override fun onAddStream(stream: MediaStream?) {}
+                override fun onRemoveStream(stream: MediaStream?) {}
+            })
 
-        when (role) {
-            Role.STREAMER -> setupStreamer()
-            Role.SCREEN_STREAMER -> setupScreenStreamer(mediaProjectionIntent)
-            Role.SCREEN_LISTENER -> setupScreenListener()
-            Role.LISTENER -> setupListener()
-            Role.MEDIA_PROVIDER -> setupMediaProvider()
-            Role.MEDIA_CONSUMER -> setupMediaConsumer()
+            if (this@WebRtcManager.role == Role.SCREEN_STREAMER || this@WebRtcManager.role == Role.STREAMER || this@WebRtcManager.role == Role.MEDIA_PROVIDER) {
+                setupDataChannelInitiator()
+            }
+
+            when (this@WebRtcManager.role) {
+                Role.STREAMER -> setupStreamer()
+                Role.SCREEN_STREAMER -> setupScreenStreamer(mediaProjectionIntent)
+                Role.SCREEN_LISTENER -> setupScreenListener()
+                Role.LISTENER -> setupListener()
+                Role.MEDIA_PROVIDER -> setupMediaProvider()
+                Role.MEDIA_CONSUMER -> setupMediaConsumer()
+            }
         }
     }
+
 
     private fun setupMediaProvider() {
         // Just signaling
@@ -230,8 +286,8 @@ class WebRtcManager(
             localVideoSource = peerConnectionFactory?.createVideoSource(true)
             videoCapturer?.initialize(surfaceTextureHelper, context, localVideoSource?.capturerObserver)
             
-            // Portrait resolution (720x1280) is more reliable for phone screen capture
-            videoCapturer?.startCapture(720, 1280, 30)
+            // High-quality screen capture: 720p at 24fps strikes a good balance between delay and smoothness
+            videoCapturer?.startCapture(720, 1280, 24)
             
             localVideoTrack = peerConnectionFactory?.createVideoTrack("ARDAMSv0", localVideoSource)
             
@@ -247,11 +303,27 @@ class WebRtcManager(
                 }
             })
             
-            peerConnection?.addTrack(localVideoTrack, listOf("ARDAMS"))
+            val sender = peerConnection?.addTrack(localVideoTrack, listOf("ARDAMS"))
+            sender?.let { tuneScreenTrackParameters(it) }
 
             // Audio
             setupAudioTrack()
             peerConnection?.addTrack(localAudioTrack, listOf("ARDAMS"))
+        }
+    }
+
+    private fun tuneScreenTrackParameters(sender: RtpSender) {
+        val parameters = sender.parameters
+        if (parameters.encodings.isNotEmpty()) {
+            for (encoding in parameters.encodings) {
+                // High priority for screen sharing to minimize lag
+                encoding.networkPriority = 3 // Priority.VERY_HIGH (3)
+                encoding.bitratePriority = 2.0
+                encoding.minBitrateBps = 300 * 1000 // 300kbps min (lower floor for stability)
+                encoding.maxBitrateBps = 4000 * 1000 // 4Mbps max
+                encoding.maxFramerate = 24
+            }
+            sender.parameters = parameters
         }
     }
 
@@ -457,8 +529,10 @@ class WebRtcManager(
     fun dispose() {
         Log.d(TAG, "Disposing WebRtcManager")
         stop()
+        scope.cancel()
         peerConnectionFactory?.dispose()
         peerConnectionFactory = null
         eglBase.release()
     }
+
 }

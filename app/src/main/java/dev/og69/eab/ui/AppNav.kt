@@ -25,6 +25,7 @@ import dev.og69.eab.ui.dashboard.LiveAudioScreen
 import dev.og69.eab.ui.dashboard.LiveScreenViewScreen
 import dev.og69.eab.ui.dashboard.MediaBrowserScreen
 import dev.og69.eab.ui.dashboard.MediaDetailScreen
+import dev.og69.eab.ui.dashboard.AppControlScreen
 import java.net.URLDecoder
 import java.net.URLEncoder
 
@@ -124,8 +125,13 @@ fun AppNav(modifier: Modifier = Modifier) {
                 onNavigateToMediaBrowser = {
                     nav.navigate("media_browser")
                 },
+                onNavigateToAppControl = {
+                    nav.navigate("app_control")
+                },
+                navController = nav,
             )
         }
+
         composable("contacts") {
             ContactsScreen(
                 onBack = { nav.popBackStack() }
@@ -176,6 +182,9 @@ fun AppNav(modifier: Modifier = Modifier) {
                 mediaId = id,
                 onBack = { nav.popBackStack() }
             )
+        }
+        composable("app_control") {
+            AppControlScreen(onBack = { nav.popBackStack() })
         }
     }
 }

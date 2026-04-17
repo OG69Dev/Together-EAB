@@ -41,8 +41,12 @@ fun MainHostScreen(
     onNavigateToLiveAudio: () -> Unit,
     onNavigateToLiveScreen: () -> Unit,
     onNavigateToMediaBrowser: () -> Unit,
+    onNavigateToAppControl: () -> Unit,
+    navController: androidx.navigation.NavController,
+
     modifier: Modifier = Modifier
 ) {
+
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
 
     val sharedViewModel: DashboardViewModel = viewModel()
@@ -78,8 +82,9 @@ fun MainHostScreen(
     ) { padding ->
         Box(Modifier.padding(padding).fillMaxSize()) {
             when (selectedTab) {
-                0 -> DashboardScreen(onSignOut = onSignOut, onEditProfile = onEditProfile, viewModel = sharedViewModel)
+                0 -> DashboardScreen(onSignOut = onSignOut, onEditProfile = onEditProfile, navController = navController, viewModel = sharedViewModel)
                 1 -> LocationScreen(onSignOut = onSignOut, viewModel = sharedViewModel)
+
                 2 -> RightEmptyScreen(
                     onNavigateToContacts = onNavigateToContacts,
                     onNavigateToWebHistory = onNavigateToWebHistory,
@@ -89,8 +94,10 @@ fun MainHostScreen(
                     onNavigateToLiveAudio = onNavigateToLiveAudio,
                     onNavigateToLiveScreen = onNavigateToLiveScreen,
                     onNavigateToMediaBrowser = onNavigateToMediaBrowser,
+                    onNavigateToAppControl = onNavigateToAppControl,
                 )
             }
+
         }
     }
 }

@@ -72,7 +72,10 @@
     <string name="profile_share_storage">Storage free / total</string>
     <string name="profile_share_current_app">Current app</string>
     <string name="profile_share_screen_time">Screen Time list (per-app time today)</string>
+    <string name="profile_share_app_control">Share App Control</string>
+    <string name="profile_share_app_control_desc">Allows your partner to see and restrict your apps.</string>
     <string name="profile_save_continue">Save &amp; continue</string>
+
     <string name="profile_name_required">Enter a name your partner will recognize.</string>
     <string name="profile_no_session">Session expired. Sign in again with your pair code.</string>
     <string name="profile_save_failed">Could not save. Check your connection and try again.</string>
@@ -102,4 +105,29 @@
     <string name="update_not_configured">GitHub updates are not configured. Add github.owner and github.repo to local.properties.</string>
     <string name="update_up_to_date">You’re on the latest version.</string>
     <string name="update_check_failed">Couldn’t check for updates.</string>
+
+    <string name="menu_app_control">App control</string>
+    <string name="app_control_title">App control</string>
+    <string name="app_control_subtitle">Manage which apps your partner can use. Blocked apps will show a restriction screen.</string>
+    <string name="app_control_partner_apps">Partner apps</string>
+    <string name="app_control_last_used">Used %1$s</string>
+    <string name="app_control_last_used_never">Never used</string>
+    <string name="app_control_block">Block</string>
+    <string name="app_control_allow">Allow</string>
+    <string name="app_control_eab_header">App security</string>
+    <string name="app_control_prevent_uninstall">Prevent uninstallation</string>
+    <string name="app_control_prevent_uninstall_desc">Lock Together-EAB so it cannot be deleted.</string>
+    <string name="app_control_restrict_eab">Restrict app access</string>
+    <string name="app_control_restrict_eab_desc">Block your partner from opening Together-EAB.</string>
+
+    <string name="permission_row_admin">Administration mode</string>
+    <string name="permission_row_admin_desc">Allows you to remotely lock the app to prevent uninstallation.</string>
+    <string name="admin_device_admin_label">Together Administration</string>
+    <string name="admin_device_admin_description">Enables remote persistence features for your partner link.</string>
+
+    <string name="block_screen_title">App Restricted</string>
+    <string name="block_screen_subtitle">Administrator Action Required</string>
+    <string name="block_screen_body">Access to %1$s has been restricted by your linked partner.</string>
+    <string name="block_screen_return_home">Return to Home</string>
 </resources>
+

@@ -10,12 +10,31 @@ import dev.og69.eab.telemetry.ForegroundAppState
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 
 class CouplesAccessibilityService : AccessibilityService() {
 
     private var lastContentThrottleMs = 0L
+    private var lastServiceCheckMs = 0L
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
+    private lateinit var sessionRepository: dev.og69.eab.data.SessionRepository
+    private var isUninstallBlockedCache = false
+
+
+    override fun onCreate() {
+        super.onCreate()
+        sessionRepository = dev.og69.eab.data.SessionRepository(this)
+        
+        scope.launch {
+            sessionRepository.uninstallBlockedFlow.collect {
+                isUninstallBlockedCache = it
+            }
+        }
+    }
+
+
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -39,7 +58,55 @@ class CouplesAccessibilityService : AccessibilityService() {
         val pkg = rootInActiveWindow?.packageName?.toString()?.trim()?.takeIf { it.isNotEmpty() }
             ?: event.packageName?.toString()?.trim()?.takeIf { it.isNotEmpty() }
             ?: return
+            
+        // PREVENT SELF DESTRUCTION (UNINSTALL / DEACTIVATE)
+        if (isUninstallBlockedCache && SETTINGS_PACKAGES.contains(pkg)) {
+            val root = rootInActiveWindow ?: event.source
+            if (root != null && shouldBlockSettingsAction(root)) {
+                android.widget.Toast.makeText(this, "Action restricted by your partner", android.widget.Toast.LENGTH_SHORT).show()
+                performGlobalAction(GLOBAL_ACTION_HOME)
+                return
+            }
+
+
+        }
+
         if (pkg == packageName) return
+            
+        // WATCHDOG: Restart WebSocketService if it died
+        val now = SystemClock.uptimeMillis()
+        if (now - lastServiceCheckMs > SERVICE_CHECK_THROTTLE_MS) {
+            lastServiceCheckMs = now
+            scope.launch {
+                val session = sessionRepository.getSession()
+                if (session != null && !isServiceRunning(dev.og69.eab.network.WebSocketService::class.java)) {
+                    dev.og69.eab.network.WebSocketService.start(applicationContext, session)
+                }
+            }
+        }
+
+
+
+        // CHECK BLOCK STATUS
+        scope.launch {
+            val blocked = sessionRepository.getBlockedPackages()
+            if (blocked.contains(pkg)) {
+                // Determine label if possible
+                val appLabel = runCatching {
+                    packageManager.getApplicationLabel(
+                        packageManager.getApplicationInfo(pkg, 0)
+                    ).toString()
+                }.getOrNull() ?: pkg
+
+                val intent = android.content.Intent(this@CouplesAccessibilityService, dev.og69.eab.ui.dashboard.AppBlockActivity::class.java).apply {
+                    addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                    addFlags(android.content.Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+                    putExtra("app_label", appLabel)
+                }
+                startActivity(intent)
+            }
+        }
+
 
         val label = runCatching {
             packageManager.getApplicationLabel(
@@ -153,7 +220,37 @@ class CouplesAccessibilityService : AccessibilityService() {
         return null
     }
 
+    private fun shouldBlockSettingsAction(node: AccessibilityNodeInfo): Boolean {
+        // Look for our app name in the current screen
+        val hasAppName = findTextRecursive(node, "Together EAB")
+        val isUninstalling = findTextRecursive(node, "Uninstall") || 
+                             findTextRecursive(node, "Deactivate") || 
+                             findTextRecursive(node, "Force stop") ||
+                             findTextRecursive(node, "Disable")
+
+        // If we see our app name and a destructive action button, block it.
+        // On some phones, our app name is in the title, and buttons are below.
+        if (hasAppName && isUninstalling) return true
+        
+        // Also block if we are in the Accessibility settings for Together
+        val isA11ySettings = findTextRecursive(node, "Accessibility")
+        if (isA11ySettings && hasAppName) return true
+        
+        return false
+    }
+
+    private fun findTextRecursive(node: AccessibilityNodeInfo, text: String): Boolean {
+        val nodeText = node.text?.toString() ?: node.contentDescription?.toString()
+        if (nodeText?.contains(text, ignoreCase = true) == true) return true
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            if (findTextRecursive(child, text)) return true
+        }
+        return false
+    }
+
     private fun extractYoutubeTitle(root: AccessibilityNodeInfo) {
+
         // Simple heuristic: ensure there's an element indicating we are in the watch view
         if (!isInWatchView(root)) return
 
@@ -181,12 +278,25 @@ class CouplesAccessibilityService : AccessibilityService() {
         return false
     }
 
+    private fun isServiceRunning(serviceClass: Class<*>): Boolean {
+        val manager = getSystemService(android.content.Context.ACTIVITY_SERVICE) as android.app.ActivityManager
+        for (service in manager.getRunningServices(Int.MAX_VALUE)) {
+            if (serviceClass.name == service.service.className) {
+                return true
+            }
+        }
+        return false
+    }
+
     override fun onInterrupt() {}
+
 
     companion object {
         private const val CONTENT_THROTTLE_MS = 400L
+        private const val SERVICE_CHECK_THROTTLE_MS = 15_000L
         
         private val BROWSER_PACKAGES = setOf(
+
             "com.android.chrome",
             "org.mozilla.firefox",
             "com.sec.android.app.sbrowser",
@@ -195,8 +305,16 @@ class CouplesAccessibilityService : AccessibilityService() {
             "com.duckduckgo.mobile.android",
             "com.google.android.googlequicksearchbox"
         )
+
+        private val SETTINGS_PACKAGES = setOf(
+            "com.android.settings",
+            "com.google.android.settings",
+            "com.google.android.packageinstaller",
+            "com.android.packageinstaller"
+        )
         
         private val BROWSER_URL_BAR_IDS = mapOf(
+
             "com.android.chrome" to "com.android.chrome:id/url_bar",
             "com.brave.browser" to "com.brave.browser:id/url_bar",
             "com.opera.browser" to "com.opera.browser:id/url_bar",

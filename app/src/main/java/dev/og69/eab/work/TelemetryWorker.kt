@@ -129,6 +129,23 @@ class TelemetryWorker(
             }
         }
 
+        // ── Installed Apps sync ──
+        if (cachedProfile?.shareAppControl == true) {
+            try {
+                val apps = dev.og69.eab.data.AppHelper.getInstalledApps(applicationContext)
+                val hash = dev.og69.eab.data.AppHelper.computeAppsHash(apps)
+                val lastHash = repo.getLatestAppsHash()
+                if (hash != "empty" && hash != lastHash) {
+                    api.postInstalledApps(session, apps)
+                    repo.saveLatestAppsHash(hash)
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+
+
+
         return try {
             api.postTelemetry(session, json)
             Result.success()

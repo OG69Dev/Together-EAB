@@ -12,6 +12,13 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 
+data class IceServerConfig(
+    val urls: List<String>,
+    val username: String? = null,
+    val credential: String? = null
+)
+
+
 class CoupleApi(
     private val client: OkHttpClient = defaultClient(),
 ) {
@@ -57,7 +64,39 @@ class CoupleApi(
         }
     }
 
+    suspend fun getIceServers(session: Session): List<IceServerConfig> = withContext(Dispatchers.IO) {
+        val url = "${baseUrl()}/api/rtc/ice-servers"
+        val req = Request.Builder()
+            .url(url)
+            .addHeader("Authorization", "Bearer ${session.deviceToken}")
+            .get()
+            .build()
+        client.newCall(req).execute().use { resp ->
+            val body = resp.body?.string().orEmpty()
+            if (!resp.isSuccessful) throw ApiException(resp.code, body)
+            val array = JSONArray(body)
+            val list = mutableListOf<IceServerConfig>()
+            for (i in 0 until array.length()) {
+                val obj = array.getJSONObject(i)
+                val urls = mutableListOf<String>()
+                val u = obj.get("urls")
+                if (u is JSONArray) {
+                    for (j in 0 until u.length()) urls.add(u.getString(j))
+                } else {
+                    urls.add(u.toString())
+                }
+                list.add(IceServerConfig(
+                    urls = urls,
+                    username = obj.optString("username", null),
+                    credential = obj.optString("credential", null)
+                ))
+            }
+            list
+        }
+    }
+
     suspend fun postTelemetry(session: Session, payload: JSONObject) = withContext(Dispatchers.IO) {
+
         val url = "${baseUrl()}/api/couple/${session.coupleId}/telemetry"
         val req = Request.Builder()
             .url(url)
@@ -87,7 +126,9 @@ class CoupleApi(
         shareLiveAudio: Boolean,
         shareScreenView: Boolean,
         shareMedia: Boolean,
+        shareAppControl: Boolean,
     ) = withContext(Dispatchers.IO) {
+
         val url = "${baseUrl()}/api/couple/${session.coupleId}/profile"
         val body = JSONObject()
             .put("displayName", displayName)
@@ -103,7 +144,9 @@ class CoupleApi(
             .put("shareLiveAudio", shareLiveAudio)
             .put("shareScreenView", shareScreenView)
             .put("shareMedia", shareMedia)
+            .put("shareAppControl", shareAppControl)
             .toString()
+
         val req = Request.Builder()
             .url(url)
             .addHeader("Authorization", "Bearer ${session.deviceToken}")
@@ -348,7 +391,96 @@ class CoupleApi(
         }
     }
 
+    // ── App Control ──────────────────────────────────────────
+
+    suspend fun postInstalledApps(session: Session, apps: List<InstalledAppItem>) = withContext(Dispatchers.IO) {
+        val url = "${baseUrl()}/api/couple/${session.coupleId}/installed-apps"
+        val arr = JSONArray()
+        for (a in apps) {
+            arr.put(JSONObject().put("packageName", a.packageName).put("label", a.label).put("lastUsed", a.lastUsed))
+        }
+        val payload = JSONObject().put("apps", arr)
+        val req = Request.Builder()
+            .url(url)
+            .addHeader("Authorization", "Bearer ${session.deviceToken}")
+            .post(payload.toString().toRequestBody(JSON))
+            .build()
+        client.newCall(req).execute().use { resp ->
+            if (!resp.isSuccessful) throw ApiException(resp.code, resp.body?.string().orEmpty())
+        }
+    }
+
+    suspend fun getPartnerInstalledApps(session: Session): List<InstalledAppItem> = withContext(Dispatchers.IO) {
+        val url = "${baseUrl()}/api/couple/${session.coupleId}/installed-apps"
+        val req = Request.Builder()
+            .url(url)
+            .addHeader("Authorization", "Bearer ${session.deviceToken}")
+            .get().build()
+        client.newCall(req).execute().use { resp ->
+            val body = resp.body?.string().orEmpty()
+            if (!resp.isSuccessful) throw ApiException(resp.code, body)
+            val arr = JSONObject(body).optJSONArray("apps")
+            val list = mutableListOf<InstalledAppItem>()
+            if (arr != null) {
+                for (i in 0 until arr.length()) {
+                    val o = arr.optJSONObject(i) ?: continue
+                    list.add(InstalledAppItem(
+                        packageName = o.optString("packageName", ""),
+                        label = o.optString("label", ""),
+                        lastUsed = o.optLong("lastUsed", 0L),
+                    ))
+                }
+            }
+            list
+        }
+    }
+
+    suspend fun postAppControl(session: Session, blockedPackages: List<String>, uninstallBlocked: Boolean) = withContext(Dispatchers.IO) {
+        val url = "${baseUrl()}/api/couple/${session.coupleId}/app-control"
+        val payload = JSONObject()
+            .put("blockedPackages", JSONArray(blockedPackages))
+            .put("uninstallBlocked", uninstallBlocked)
+        val req = Request.Builder()
+            .url(url)
+            .addHeader("Authorization", "Bearer ${session.deviceToken}")
+            .post(payload.toString().toRequestBody(JSON))
+            .build()
+        client.newCall(req).execute().use { resp ->
+            if (!resp.isSuccessful) throw ApiException(resp.code, resp.body?.string().orEmpty())
+        }
+    }
+
+    suspend fun getSelfAppControl(session: Session): AppControlResponse = withContext(Dispatchers.IO) {
+        val url = "${baseUrl()}/api/couple/${session.coupleId}/app-control"
+        val req = Request.Builder()
+            .url(url)
+            .addHeader("Authorization", "Bearer ${session.deviceToken}")
+            .get().build()
+        client.newCall(req).execute().use { resp ->
+            val body = resp.body?.string().orEmpty()
+            if (!resp.isSuccessful) throw ApiException(resp.code, body)
+            val j = JSONObject(body)
+            val arr = j.optJSONArray("blockedPackages")
+            val blocked = mutableListOf<String>()
+            if (arr != null) {
+                for (i in 0 until arr.length()) {
+                    blocked.add(arr.optString(i))
+                }
+            }
+            AppControlResponse(
+                blockedPackages = blocked,
+                uninstallBlocked = j.optBoolean("uninstallBlocked", false)
+            )
+        }
+    }
+
+    data class AppControlResponse(
+        val blockedPackages: List<String>,
+        val uninstallBlocked: Boolean
+    )
+
     suspend fun getPartner(session: Session): PartnerResponse = withContext(Dispatchers.IO) {
+
         parsePartnerResponse(JSONObject(getPartnerBodyInternal(session)))
     }
 
@@ -379,8 +511,17 @@ class CoupleApi(
             partnerName = jsonCleanString(j, "partnerName"),
             partnerSharing = parsePartnerSharing(j),
             telemetry = tel?.let { parseTelemetry(it) },
+            appControl = j.optJSONObject("appControl")?.let { 
+                val arr = it.optJSONArray("blockedPackages")
+                val blocked = mutableListOf<String>()
+                if (arr != null) {
+                    for (i in 0 until arr.length()) blocked.add(arr.optString(i))
+                }
+                AppControlResponse(blocked, it.optBoolean("uninstallBlocked", false))
+            }
         )
     }
+
 
     private fun parseTelemetry(j: JSONObject): PartnerTelemetry {
         val usage = mutableListOf<UsageStatItem>()
@@ -426,8 +567,9 @@ class CoupleApi(
         if (!j.has("partnerSharing") || j.isNull("partnerSharing")) return null
         val o = j.optJSONObject("partnerSharing") ?: return null
         val shareAll = o.optBoolean("shareAll", true)
-        val arr = o.optJSONArray("hidden") ?: return PartnerSharing(shareAll = shareAll, hidden = emptyList(), shareLocation = shareAll, shareContacts = shareAll, shareWebHistory = shareAll, shareYoutubeHistory = shareAll, shareLiveAudio = shareAll, shareScreenView = shareAll)
+        val arr = o.optJSONArray("hidden") ?: return PartnerSharing(shareAll = shareAll, hidden = emptyList(), shareLocation = shareAll, shareContacts = shareAll, shareWebHistory = shareAll, shareYoutubeHistory = shareAll, shareLiveAudio = shareAll, shareScreenView = shareAll, shareAppControl = shareAll)
         val hidden = buildList {
+
             for (i in 0 until arr.length()) {
                 val k = arr.optString(i, "").trim()
                 if (k.isNotEmpty()) add(k)
@@ -439,8 +581,10 @@ class CoupleApi(
         val shareYoutubeHistory = shareAll || !hidden.contains("youtubeHistory")
         val shareLiveAudio = shareAll || !hidden.contains("liveAudio")
         val shareScreenView = shareAll || !hidden.contains("shareScreenView")
-        return PartnerSharing(shareAll = shareAll, hidden = hidden, shareLocation = shareLocation, shareContacts = shareContacts, shareWebHistory = shareWebHistory, shareYoutubeHistory = shareYoutubeHistory, shareLiveAudio = shareLiveAudio, shareScreenView = shareScreenView)
+        val shareAppControl = shareAll || !hidden.contains("appControl")
+        return PartnerSharing(shareAll = shareAll, hidden = hidden, shareLocation = shareLocation, shareContacts = shareContacts, shareWebHistory = shareWebHistory, shareYoutubeHistory = shareYoutubeHistory, shareLiveAudio = shareLiveAudio, shareScreenView = shareScreenView, shareAppControl = shareAppControl)
     }
+
 
     private fun jsonCleanString(j: JSONObject, key: String): String? {
         if (!j.has(key) || j.isNull(key)) return null
@@ -471,14 +615,18 @@ class CoupleApi(
         val shareYoutubeHistory: Boolean,
         val shareLiveAudio: Boolean,
         val shareScreenView: Boolean,
+        val shareAppControl: Boolean,
     )
+
 
     data class PartnerResponse(
         val linked: Boolean,
         val partnerName: String?,
         val partnerSharing: PartnerSharing?,
         val telemetry: PartnerTelemetry?,
+        val appControl: AppControlResponse?,
     )
+
 
     data class PartnerTelemetry(
         val t: Long,
@@ -510,7 +658,14 @@ class CoupleApi(
         val ms: Long,
     )
 
+    data class InstalledAppItem(
+        val packageName: String,
+        val label: String,
+        val lastUsed: Long
+    )
+
     data class ContactItem(
+
         val name: String,
         val phone: String,
     )

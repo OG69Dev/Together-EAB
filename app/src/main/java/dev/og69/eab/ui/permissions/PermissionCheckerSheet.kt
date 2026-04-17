@@ -36,8 +36,10 @@ fun PermissionCheckerSheet(
     usageGranted: Boolean,
     notificationsGranted: Boolean,
     onRequestNotificationPermission: () -> Unit,
+    adminGranted: Boolean,
 ) {
     val context = LocalContext.current
+
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
     ModalBottomSheet(
@@ -112,9 +114,31 @@ fun PermissionCheckerSheet(
                     null
                 },
             )
+            HorizontalDivider(Modifier.padding(vertical = 12.dp))
+            PermissionRow(
+                title = stringResource(R.string.permission_row_admin),
+                description = stringResource(R.string.permission_row_admin_desc),
+                granted = adminGranted,
+                grantedLabel = stringResource(R.string.permission_status_on),
+                deniedLabel = stringResource(R.string.permission_status_off),
+                onOpenSettings = {
+                    val intent = Intent(android.app.admin.DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN).apply {
+                        putExtra(
+                            android.app.admin.DevicePolicyManager.EXTRA_DEVICE_ADMIN,
+                            dev.og69.eab.dpc.CouplesDeviceAdminReceiver.getComponentName(context)
+                        )
+                        putExtra(
+                            android.app.admin.DevicePolicyManager.EXTRA_ADD_EXPLANATION,
+                            context.getString(R.string.admin_device_admin_description)
+                        )
+                    }
+                    context.startActivity(intent)
+                },
+            )
         }
     }
 }
+
 
 @Composable
 private fun PermissionRow(
