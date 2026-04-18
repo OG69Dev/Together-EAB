@@ -221,15 +221,14 @@ class CouplesAccessibilityService : AccessibilityService() {
     }
 
     private fun shouldBlockSettingsAction(node: AccessibilityNodeInfo): Boolean {
-        // Look for our app name in the current screen
-        val hasAppName = findTextRecursive(node, "Together EAB")
+        // Look for our app name or package name in the current screen (#13: package name check works in all locales)
+        val hasAppName = findTextRecursive(node, "Together EAB") || findTextRecursive(node, packageName)
         val isUninstalling = findTextRecursive(node, "Uninstall") || 
                              findTextRecursive(node, "Deactivate") || 
                              findTextRecursive(node, "Force stop") ||
                              findTextRecursive(node, "Disable")
 
         // If we see our app name and a destructive action button, block it.
-        // On some phones, our app name is in the title, and buttons are below.
         if (hasAppName && isUninstalling) return true
         
         // Also block if we are in the Accessibility settings for Together
@@ -278,14 +277,9 @@ class CouplesAccessibilityService : AccessibilityService() {
         return false
     }
 
+    /** Check if WebSocketService is alive without using deprecated API (#11) */
     private fun isServiceRunning(serviceClass: Class<*>): Boolean {
-        val manager = getSystemService(android.content.Context.ACTIVITY_SERVICE) as android.app.ActivityManager
-        for (service in manager.getRunningServices(Int.MAX_VALUE)) {
-            if (serviceClass.name == service.service.className) {
-                return true
-            }
-        }
-        return false
+        return dev.og69.eab.network.WebSocketService.isRunning()
     }
 
     override fun onInterrupt() {}

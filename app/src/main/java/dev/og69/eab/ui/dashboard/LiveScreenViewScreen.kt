@@ -33,7 +33,8 @@ import org.webrtc.EglBase
 @Composable
 fun LiveScreenViewScreen(onBack: () -> Unit) {
     val state by WebSocketService.screenStateFlow.collectAsState()
-    val remoteTrack by WebSocketService.remoteVideoTrackFlow.collectAsState()
+    val remoteTracks by WebSocketService.remoteVideoTracksFlow.collectAsState()
+    val remoteTrack = remoteTracks.values.firstOrNull()
     
     val context = LocalContext.current
     val eglBase = remember { EglBase.create() }
@@ -117,27 +118,25 @@ fun LiveScreenViewScreen(onBack: () -> Unit) {
         ) {
             if (remoteTrack != null) {
                 val track = remoteTrack
-                AndroidView(
-                    factory = { ctx ->
-                        dev.og69.eab.webrtc.TextureViewRenderer(ctx).apply {
-                            init(eglBase.eglBaseContext)
-                        }
-                    },
-                    update = { view ->
-                        track?.addSink(view)
-                    },
-                    onReset = { view ->
-                        track?.removeSink(view)
-                    },
-                    onRelease = { view ->
-                        track?.removeSink(view)
-                        view.release()
-                    },
-                    modifier = Modifier.fillMaxSize()
-                )
+                key(track?.id() ?: "") {
+                    AndroidView(
+                        factory = { ctx ->
+                            dev.og69.eab.webrtc.TextureViewRenderer(ctx).apply {
+                                init(eglBase.eglBaseContext)
+                                try { track?.addSink(this) } catch (e: Exception) {}
+                            }
+                        },
+                        update = { },
+                        onRelease = { view ->
+                            try { track?.removeSink(view) } catch(e: Exception) {}
+                            view.release()
+                        },
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
 
                 LaunchedEffect(track) {
-                    track?.setEnabled(true)
+                    try { track?.setEnabled(true) } catch(e: Exception) {}
                 }
 
                 // Interaction Layer

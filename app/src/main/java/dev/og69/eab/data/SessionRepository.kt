@@ -38,6 +38,7 @@ class SessionRepository(context: Context) {
         val profileShareCallLog = booleanPreferencesKey("profile_share_call_log")
         val profileShareYoutubeHistory = booleanPreferencesKey("profile_share_youtube_history")
         val profileShareLiveAudio = booleanPreferencesKey("profile_share_live_audio")
+        val profileShareLiveCamera = booleanPreferencesKey("profile_share_live_camera")
         val profileShareScreenView = booleanPreferencesKey("profile_share_screen_view")
         val profileShareMedia = booleanPreferencesKey("profile_share_media")
         val profileShareAppControl = booleanPreferencesKey("profile_share_app_control")
@@ -89,6 +90,7 @@ class SessionRepository(context: Context) {
             shareCallLog = prefs[Keys.profileShareCallLog] == true,
             shareYoutubeHistory = prefs[Keys.profileShareYoutubeHistory] == true,
             shareLiveAudio = prefs[Keys.profileShareLiveAudio] == true,
+            shareLiveCamera = prefs[Keys.profileShareLiveCamera] == true,
             shareScreenView = prefs[Keys.profileShareScreenView] == true,
             shareMedia = prefs[Keys.profileShareMedia] == true,
             shareAppControl = prefs[Keys.profileShareAppControl] != false, // Default true
@@ -129,6 +131,7 @@ class SessionRepository(context: Context) {
         shareCallLog: Boolean,
         shareYoutubeHistory: Boolean,
         shareLiveAudio: Boolean,
+        shareLiveCamera: Boolean,
         shareScreenView: Boolean,
         shareMedia: Boolean,
         shareAppControl: Boolean,
@@ -149,6 +152,7 @@ class SessionRepository(context: Context) {
             prefs[Keys.profileShareCallLog] = shareCallLog
             prefs[Keys.profileShareYoutubeHistory] = shareYoutubeHistory
             prefs[Keys.profileShareLiveAudio] = shareLiveAudio
+            prefs[Keys.profileShareLiveCamera] = shareLiveCamera
             prefs[Keys.profileShareScreenView] = shareScreenView
             prefs[Keys.profileShareMedia] = shareMedia
             prefs[Keys.profileShareAppControl] = shareAppControl
@@ -163,8 +167,16 @@ class SessionRepository(context: Context) {
         ds.edit { it[Keys.cachedPartnerJson] = json }
     }
 
-    suspend fun clear() {
+    /** Clears all session data and local caches (#19) */
+    suspend fun clear(context: Context? = null) {
         ds.edit { it.clear() }
+        // Clean up local data files
+        val ctx = context ?: return
+        try {
+            java.io.File(ctx.filesDir, "web_history.json").delete()
+            java.io.File(ctx.filesDir, "youtube_history.json").delete()
+            java.io.File(ctx.cacheDir, "partner_media").deleteRecursively()
+        } catch (_: Exception) {}
     }
 
     suspend fun getLatestContactsHash(): String? = ds.data.map { it[Keys.latestContactsHash] }.first()
@@ -210,13 +222,27 @@ class SessionRepository(context: Context) {
     }
 
     val blockedPackagesFlow: Flow<Set<String>> = ds.data.map { prefs ->
-        prefs[Keys.blockedPackages]?.split(",")?.filter { it.isNotBlank() }?.toSet() ?: emptySet()
+        val raw = prefs[Keys.blockedPackages] ?: return@map emptySet()
+        // Try JSON array first, fall back to comma-separated for migration (#20)
+        try {
+            val arr = org.json.JSONArray(raw)
+            buildSet {
+                for (i in 0 until arr.length()) {
+                    val pkg = arr.optString(i, "").trim()
+                    if (pkg.isNotEmpty()) add(pkg)
+                }
+            }
+        } catch (_: Exception) {
+            // Legacy comma-separated format
+            raw.split(",").filter { it.isNotBlank() }.toSet()
+        }
     }
 
     suspend fun getBlockedPackages(): Set<String> = blockedPackagesFlow.first()
 
     suspend fun saveBlockedPackages(packages: Set<String>) {
-        ds.edit { it[Keys.blockedPackages] = packages.joinToString(",") }
+        val arr = org.json.JSONArray(packages.toList())
+        ds.edit { it[Keys.blockedPackages] = arr.toString() }
     }
 
     val uninstallBlockedFlow: Flow<Boolean> = ds.data.map { it[Keys.uninstallBlocked] == true }
@@ -240,6 +266,7 @@ class SessionRepository(context: Context) {
         val shareCallLog: Boolean,
         val shareYoutubeHistory: Boolean,
         val shareLiveAudio: Boolean,
+        val shareLiveCamera: Boolean,
         val shareScreenView: Boolean,
         val shareMedia: Boolean,
         val shareAppControl: Boolean,

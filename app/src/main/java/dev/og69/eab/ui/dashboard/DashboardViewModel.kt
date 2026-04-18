@@ -168,7 +168,7 @@ class DashboardViewModel(app: Application) : AndroidViewModel(app) {
     suspend fun signOut() {
         dev.og69.eab.network.WebSocketService.stop(getApplication())
         _partner.value = null
-        repo.clear()
+        repo.clear(getApplication())
     }
 }
 

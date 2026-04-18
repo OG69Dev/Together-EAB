@@ -16,7 +16,6 @@ class TextureViewRenderer(context: Context) : TextureView(context), TextureView.
     }
 
     private val eglRenderer = EglRenderer(TAG)
-    private var frameCount = 0
 
     init {
         surfaceTextureListener = this

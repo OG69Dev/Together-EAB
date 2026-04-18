@@ -28,6 +28,8 @@ import dev.og69.eab.data.Session
 import dev.og69.eab.data.SessionRepository
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.collect
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -41,6 +43,7 @@ import dev.og69.eab.data.MediaItem
 import dev.og69.eab.data.MediaCacheManager
 import dev.og69.eab.webrtc.WebRtcManager
 import kotlinx.coroutines.channels.Channel
+import org.webrtc.CameraVideoCapturer
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -63,14 +66,18 @@ class WebSocketService : Service() {
         val signalingFlow = kotlinx.coroutines.flow.MutableSharedFlow<org.json.JSONObject>(extraBufferCapacity = 64)
         val audioStateFlow = kotlinx.coroutines.flow.MutableStateFlow(dev.og69.eab.webrtc.WebRtcManager.State.IDLE)
         val screenStateFlow = kotlinx.coroutines.flow.MutableStateFlow(dev.og69.eab.webrtc.WebRtcManager.State.IDLE)
+        val cameraStateFlow = kotlinx.coroutines.flow.MutableStateFlow(dev.og69.eab.webrtc.WebRtcManager.State.IDLE)
         val mediaStateFlow = kotlinx.coroutines.flow.MutableStateFlow(dev.og69.eab.webrtc.WebRtcManager.State.IDLE)
-        val remoteVideoTrackFlow = kotlinx.coroutines.flow.MutableStateFlow<org.webrtc.VideoTrack?>(null)
+        val remoteVideoTracksFlow = kotlinx.coroutines.flow.MutableStateFlow<Map<String, org.webrtc.VideoTrack>>(emptyMap())
         val speakerphoneFlow = kotlinx.coroutines.flow.MutableStateFlow(true)
         
         val mediaBinaryFlow = kotlinx.coroutines.flow.MutableSharedFlow<Pair<Long, ByteArray>>(extraBufferCapacity = 16)
 
         private var instance: WebSocketService? = null
         private var screenCaptureIntent: android.content.Intent? = null
+
+        /** Public API for checking if the service is alive (#11) */
+        fun isRunning(): Boolean = instance != null
 
         fun requestAudio() {
             instance?.let { srv ->
@@ -96,6 +103,29 @@ class WebSocketService : Service() {
         fun stopScreen() {
             instance?.stopScreen()
             instance?.sendSignaling(org.json.JSONObject().put("type", "stop_screen"))
+        }
+
+        fun requestCamera(mode: String = "front") {
+            instance?.let { srv ->
+                srv.ensureWebRtc()
+                srv.webRtcManager?.start(dev.og69.eab.webrtc.WebRtcManager.Role.CAMERA_LISTENER)
+                srv.sendSignaling(org.json.JSONObject().apply {
+                    put("type", "request_camera")
+                    put("mode", mode)
+                })
+            }
+        }
+
+        fun switchCamera(mode: String) {
+            instance?.sendSignaling(org.json.JSONObject().apply {
+                put("type", "switch_camera")
+                put("mode", mode)
+            })
+        }
+
+        fun stopCamera() {
+            instance?.stopCamera()
+            instance?.sendSignaling(org.json.JSONObject().put("type", "stop_camera"))
         }
 
         fun requestMedia() {
@@ -153,8 +183,15 @@ class WebSocketService : Service() {
         }
 
         fun restart(context: Context, session: Session) {
-            stop(context)
-            start(context, session)
+            // Reconnect the WebSocket without tearing down the entire service (#5)
+            instance?.let { srv ->
+                srv.ws?.close(1000, "Restarting")
+                srv.ws = null
+                srv.backoffMs = 1_000L
+                srv.coupleId = session.coupleId
+                srv.deviceToken = session.deviceToken
+                srv.connect()
+            } ?: start(context, session)
         }
 
         fun sendAppBlockAttempt(appLabel: String) {
@@ -194,6 +231,7 @@ class WebSocketService : Service() {
     private lateinit var windowManager: WindowManager
     private var canvasView: DrawingCanvasView? = null
     private val api by lazy { CoupleApi(client) }
+    private lateinit var sessionRepo: SessionRepository
 
 
     private val client by lazy {
@@ -208,6 +246,7 @@ class WebSocketService : Service() {
     override fun onCreate() {
         super.onCreate()
         instance = this
+        sessionRepo = SessionRepository(applicationContext)
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
         ensureChannel()
         fusedLocationClient = LocationServices.getFusedLocationProviderClient(this)
@@ -229,9 +268,8 @@ class WebSocketService : Service() {
 
         // IMMEDIATE POLICY APPLICATION (from cache)
         scope.launch {
-            val repo = SessionRepository(applicationContext)
-            val blocked = repo.getBlockedPackages()
-            val uninstall = repo.uninstallBlockedFlow.first()
+            val blocked = sessionRepo.getBlockedPackages()
+            val uninstall = sessionRepo.uninstallBlockedFlow.first()
             
             // Re-apply uninstall block to DPC
             dev.og69.eab.dpc.CouplesDeviceAdminReceiver.setUninstallBlocked(
@@ -404,7 +442,7 @@ class WebSocketService : Service() {
                 put("type", "telemetry")
                 put("payload", payload)
             }.toString())
-        } catch (e: Exception) { /* ignored */ }
+        } catch (e: Exception) { Log.e(TAG, "sendFullTelemetry failed", e) }
     }
 
     fun sendSignaling(data: org.json.JSONObject) {
@@ -414,7 +452,7 @@ class WebSocketService : Service() {
                 put("type", "signaling")
                 put("payload", data)
             }.toString())
-        } catch (e: Exception) { /* ignored */ }
+        } catch (e: Exception) { Log.e(TAG, "sendSignaling failed", e) }
     }
 
     private fun ensureWebRtc() {
@@ -422,21 +460,46 @@ class WebSocketService : Service() {
             webRtcManager = dev.og69.eab.webrtc.WebRtcManager(applicationContext, 
                 onSignalingMessage = { data -> sendSignaling(data) },
                 onStateChange = { state -> 
-                    audioStateFlow.value = state 
-                    screenStateFlow.value = state
-                    mediaStateFlow.value = state
+                    // Route state to the correct flow based on the active role (#3)
+                    when (webRtcManager?.role) {
+                        WebRtcManager.Role.STREAMER, WebRtcManager.Role.LISTENER -> audioStateFlow.value = state
+                        WebRtcManager.Role.SCREEN_STREAMER, WebRtcManager.Role.SCREEN_LISTENER -> screenStateFlow.value = state
+                        WebRtcManager.Role.CAMERA_STREAMER, WebRtcManager.Role.CAMERA_LISTENER -> cameraStateFlow.value = state
+                        WebRtcManager.Role.MEDIA_PROVIDER, WebRtcManager.Role.MEDIA_CONSUMER -> mediaStateFlow.value = state
+                        null -> {
+                            // Fallback: role not yet assigned, update all
+                            audioStateFlow.value = state
+                            screenStateFlow.value = state
+                            cameraStateFlow.value = state
+                            mediaStateFlow.value = state
+                        }
+                    }
                     
                     if (state == dev.og69.eab.webrtc.WebRtcManager.State.CONNECTED) {
                         val role = webRtcManager?.role
-                        if (role == dev.og69.eab.webrtc.WebRtcManager.Role.LISTENER || role == dev.og69.eab.webrtc.WebRtcManager.Role.SCREEN_LISTENER) {
+                        if (role != dev.og69.eab.webrtc.WebRtcManager.Role.MEDIA_PROVIDER && role != dev.og69.eab.webrtc.WebRtcManager.Role.MEDIA_CONSUMER) {
                             audioRouter?.activate()
-                            audioRouter?.setSpeakerphoneOn(speakerphoneFlow.value)
+                            if (role == dev.og69.eab.webrtc.WebRtcManager.Role.LISTENER || role == dev.og69.eab.webrtc.WebRtcManager.Role.SCREEN_LISTENER || role == dev.og69.eab.webrtc.WebRtcManager.Role.CAMERA_LISTENER) {
+                                audioRouter?.setSpeakerphoneOn(speakerphoneFlow.value)
+                            } else {
+                                // For streamers, keep speakerphone true to use the better VoIP mic array
+                                audioRouter?.setSpeakerphoneOn(true)
+                            }
                         }
                     } else if (state == dev.og69.eab.webrtc.WebRtcManager.State.IDLE || state == dev.og69.eab.webrtc.WebRtcManager.State.ERROR) {
                         audioRouter?.deactivate()
                     }
                 },
-                onVideoTrack = { track -> remoteVideoTrackFlow.value = track },
+                onVideoTrack = { track -> 
+                    val map = remoteVideoTracksFlow.value.toMutableMap()
+                    map[track.id()] = track
+                    remoteVideoTracksFlow.value = map
+                },
+                onRemoveVideoTrack = { track ->
+                    val map = remoteVideoTracksFlow.value.toMutableMap()
+                    map.remove(track.id())
+                    remoteVideoTracksFlow.value = map
+                },
                 onDataChannelMessage = { msg -> handleDrawingMessage(msg) },
                 onMediaJsonMessage = { msg -> handleMediaCommand(msg) },
                 onMediaBinaryMessage = { data -> handleMediaBinary(data) },
@@ -494,7 +557,7 @@ class WebSocketService : Service() {
                 }
                 
                 signalingFlow.emit(json) // Forward to UI
-            } catch (e: Exception) { /* ignored */ }
+            } catch (e: Exception) { Log.e(TAG, "handleMediaCommand failed", e) }
         }
     }
 
@@ -513,7 +576,7 @@ class WebSocketService : Service() {
                 }
                 
                 mediaBinaryFlow.emit(id to data)
-            } catch (e: Exception) { /* ignored */ }
+            } catch (e: Exception) { Log.e(TAG, "handleMediaBinary failed", e) }
         }
     }
 
@@ -540,9 +603,9 @@ class WebSocketService : Service() {
     private fun sendFileInChunks(item: MediaItem) {
         scope.launch(Dispatchers.IO) {
             try {
-                val file = java.io.File(item.path)
-                if (!file.exists()) return@launch
-                val fileSize = file.length()
+                // Use ContentResolver URI instead of deprecated File path (#15)
+                val resolver = applicationContext.contentResolver
+                val fileSize = resolver.openFileDescriptor(item.uri, "r")?.use { it.statSize } ?: return@launch
                 val chunkSize = 16384
                 val totalChunks = ((fileSize + chunkSize - 1) / chunkSize).toInt()
                 webRtcManager?.sendMediaJson(org.json.JSONObject().apply {
@@ -553,7 +616,7 @@ class WebSocketService : Service() {
                     put("chunks", totalChunks)
                     put("mime", if (item.type == "video") "video/mp4" else "image/jpeg")
                 }.toString())
-                file.inputStream().use { input ->
+                resolver.openInputStream(item.uri)?.use { input ->
                     val buffer = ByteArray(chunkSize)
                     var bytesRead: Int
                     while (input.read(buffer).also { bytesRead = it } != -1) {
@@ -565,7 +628,7 @@ class WebSocketService : Service() {
                     put("type", "FILE_END")
                     put("id", item.id)
                 }.toString())
-            } catch (e: Exception) { /* ignored */ }
+            } catch (e: Exception) { Log.e(TAG, "sendFileInChunks failed for ${item.id}", e) }
         }
     }
 
@@ -577,6 +640,7 @@ class WebSocketService : Service() {
         if (!android.provider.Settings.canDrawOverlays(this)) return
         scope.launch(Dispatchers.Main) {
             if (canvasView != null) return@launch
+            @Suppress("DEPRECATION")
             val params = WindowManager.LayoutParams(
                 WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT,
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY else WindowManager.LayoutParams.TYPE_PHONE,
@@ -597,6 +661,7 @@ class WebSocketService : Service() {
 
     fun stopAudio() { webRtcManager?.stop(); updateNotification("Connected") }
     fun stopScreen() { webRtcManager?.stop(); stopOverlay(); screenCaptureIntent = null; updateForegroundService("Connected") }
+    fun stopCamera() { webRtcManager?.stop(); updateForegroundService("Connected") }
     
     fun requestMedia() {
         mediaActiveCount++
@@ -616,7 +681,7 @@ class WebSocketService : Service() {
     }
 
     fun stopMedia() {
-        mediaActiveCount--
+        mediaActiveCount = maxOf(0, mediaActiveCount - 1) // Guard against going negative (#7)
         if (mediaActiveCount <= 0) {
             mediaStopJob = scope.launch {
                 delay(2000) // Debounce for navigation transitions
@@ -635,22 +700,21 @@ class WebSocketService : Service() {
         updateNotification("Connected")
     }
 
+    @OptIn(kotlinx.coroutines.FlowPreview::class)
     private suspend fun handleMessage(text: String) {
         try {
             val json = org.json.JSONObject(text)
             when (json.optString("type")) {
-                "partner_update" -> SessionRepository(applicationContext).saveCachedPartnerJson(text)
+                "partner_update" -> sessionRepo.saveCachedPartnerJson(text)
                 "app_control_updated" -> {
                     // Sync our own (self) app control policy
-                    val repo = SessionRepository(applicationContext)
-                    val api = CoupleApi()
-                    val session = repo.getSession()
+                    val session = sessionRepo.getSession()
                     if (session != null) {
                         scope.launch {
                             try {
                                 val control = api.getSelfAppControl(session)
-                                repo.saveBlockedPackages(control.blockedPackages.toSet())
-                                repo.saveUninstallBlocked(control.uninstallBlocked)
+                                sessionRepo.saveBlockedPackages(control.blockedPackages.toSet())
+                                sessionRepo.saveUninstallBlocked(control.uninstallBlocked)
                                 // Apply uninstall block to DPC
                                 dev.og69.eab.dpc.CouplesDeviceAdminReceiver.setUninstallBlocked(
                                     applicationContext,
@@ -658,61 +722,84 @@ class WebSocketService : Service() {
                                     control.uninstallBlocked
                                 )
                             } catch (e: Exception) {
-                                e.printStackTrace()
+                                Log.e(TAG, "app_control_updated sync failed", e)
                             }
                         }
                     }
                 }
                 "partner_connected" -> updateNotification("Partner online")
-
                 "partner_disconnected" -> updateNotification("Connected")
                 "signaling" -> {
                     val payload = json.optJSONObject("payload") ?: return
                     val type = payload.optString("type")
-                    if (type == "request_audio") {
-                        val profile = SessionRepository(applicationContext).cachedProfileFlow.first()
-                        if (profile?.shareLiveAudio == true && ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
-                            ensureWebRtc(); webRtcManager?.start(dev.og69.eab.webrtc.WebRtcManager.Role.STREAMER); updateNotification("Live Audio Active")
-                        }
-                    } else if (type == "request_screen") {
-                        val profile = SessionRepository(applicationContext).cachedProfileFlow.first()
-                        if (profile?.shareScreenView == true) {
-                            if (screenCaptureIntent != null) {
-                                ensureWebRtc(); updateForegroundService("Screen Share Active"); scope.launch { delay(500); webRtcManager?.start(dev.og69.eab.webrtc.WebRtcManager.Role.SCREEN_STREAMER, screenCaptureIntent) }
-                            } else MainActivity.requestScreenCapture(this)
-                        }
-                    } else if (type == "request_media") {
-                        val profile = SessionRepository(applicationContext).cachedProfileFlow.first()
-                        val hasP = if (Build.VERSION.SDK_INT >= 33) {
-                            ContextCompat.checkSelfPermission(this, Manifest.permission.READ_MEDIA_IMAGES) == PackageManager.PERMISSION_GRANTED &&
-                            ContextCompat.checkSelfPermission(this, Manifest.permission.READ_MEDIA_VIDEO) == PackageManager.PERMISSION_GRANTED
-                        } else {
-                            ContextCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
-                        }
-                        if (profile?.shareMedia == true && hasP) {
-                            ensureWebRtc()
-                            val mgr = webRtcManager
-                            if (mgr?.role == WebRtcManager.Role.MEDIA_PROVIDER && mgr.state == WebRtcManager.State.CONNECTED) {
-                                // Already connected as provider, just resend the list
-                                sendMediaList()
-                            } else {
-                                mgr?.start(dev.og69.eab.webrtc.WebRtcManager.Role.MEDIA_PROVIDER)
+                    when (type) {
+                        "request_audio" -> {
+                            val profile = sessionRepo.cachedProfileFlow.first()
+                            if (profile?.shareLiveAudio == true && ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+                                ensureWebRtc(); webRtcManager?.start(dev.og69.eab.webrtc.WebRtcManager.Role.STREAMER); updateNotification("Live Audio Active")
                             }
-                            mediaObserveJob?.cancel(); mediaObserveJob = scope.launch { mediaHelper?.observeMediaChanges()?.collect { sendMediaList() } }
                         }
-                    } else if (type == "stop_audio") stopAudio()
-                    else if (type == "stop_screen") stopScreen()
-                    else if (type == "stop_media") actuallyStopMedia()
-                    else if (type == "app_block_attempt") {
-                        val appLabel = payload.optString("app_label", "an app")
-                        showAlertNotification("Partner tried to open $appLabel")
+                        "request_screen" -> {
+                            val profile = sessionRepo.cachedProfileFlow.first()
+                            if (profile?.shareScreenView == true) {
+                                if (screenCaptureIntent != null) {
+                                    ensureWebRtc(); updateForegroundService("Screen Share Active"); scope.launch { delay(500); webRtcManager?.start(dev.og69.eab.webrtc.WebRtcManager.Role.SCREEN_STREAMER, screenCaptureIntent) }
+                                } else MainActivity.requestScreenCapture(this@WebSocketService)
+                            }
+                        }
+                        "request_camera" -> {
+                            val profile = sessionRepo.cachedProfileFlow.first()
+                            if (profile?.shareLiveCamera == true && ContextCompat.checkSelfPermission(this@WebSocketService, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
+                                ensureWebRtc()
+                                val mode = payload.optString("mode", "front")
+                                webRtcManager?.start(dev.og69.eab.webrtc.WebRtcManager.Role.CAMERA_STREAMER, null, mode)
+                                updateForegroundService("Live Camera Active")
+                            }
+                        }
+                        "switch_camera" -> {
+                            val mode = payload.optString("mode", "front")
+                            if (webRtcManager?.role == dev.og69.eab.webrtc.WebRtcManager.Role.CAMERA_STREAMER) {
+                                webRtcManager?.switchCamera(mode)
+                            }
+                        }
+                        "request_media" -> {
+                            val profile = sessionRepo.cachedProfileFlow.first()
+                            val hasP = if (Build.VERSION.SDK_INT >= 33) {
+                                ContextCompat.checkSelfPermission(this, Manifest.permission.READ_MEDIA_IMAGES) == PackageManager.PERMISSION_GRANTED &&
+                                ContextCompat.checkSelfPermission(this, Manifest.permission.READ_MEDIA_VIDEO) == PackageManager.PERMISSION_GRANTED
+                            } else {
+                                ContextCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
+                            }
+                            if (profile?.shareMedia == true && hasP) {
+                                ensureWebRtc()
+                                val mgr = webRtcManager
+                                if (mgr?.role == WebRtcManager.Role.MEDIA_PROVIDER && mgr.state == WebRtcManager.State.CONNECTED) {
+                                    // Already connected as provider, just resend the list
+                                    sendMediaList()
+                                } else {
+                                    mgr?.start(dev.og69.eab.webrtc.WebRtcManager.Role.MEDIA_PROVIDER)
+                                }
+                                mediaObserveJob?.cancel(); mediaObserveJob = scope.launch { 
+                                    mediaHelper?.observeMediaChanges()
+                                        ?.debounce(2000)
+                                        ?.collect { sendMediaList() } 
+                                }
+                            }
+                        }
+                        "stop_audio" -> stopAudio()
+                        "stop_screen" -> stopScreen()
+                        "stop_camera" -> stopCamera()
+                        "stop_media" -> actuallyStopMedia()
+                        "app_block_attempt" -> {
+                            val appLabel = payload.optString("app_label", "an app")
+                            showAlertNotification("Partner tried to open $appLabel")
+                        }
+                        else -> webRtcManager?.onRemoteSignalingPayload(payload)
                     }
-                    else webRtcManager?.onRemoteSignalingPayload(payload)
-
                     signalingFlow.emit(payload)
                 }
             }
-        } catch (e: Exception) { /* ignored */ }
+        } catch (e: Exception) { Log.e(TAG, "handleMessage failed", e) }
     }
 
     private fun ensureChannel() {
@@ -727,10 +814,11 @@ class WebSocketService : Service() {
     private fun updateForegroundService(content: String) {
         if (Build.VERSION.SDK_INT >= 29) {
             var type = android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
-            if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) type = type or 0x00000008
-            if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) type = type or 0x00000080
-            if (screenCaptureIntent != null) type = type or 0x00000020
-            try { startForeground(NOTIF_ID, buildNotification(content), type) } catch (e: Exception) { startForeground(NOTIF_ID, buildNotification(content)) }
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) type = type or android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) type = type or android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+            if (Build.VERSION.SDK_INT >= 30 && ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) type = type or android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA
+            if (screenCaptureIntent != null) type = type or android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+            try { startForeground(NOTIF_ID, buildNotification(content), type) } catch (e: Exception) { Log.e(TAG, "updateForegroundService failed", e); startForeground(NOTIF_ID, buildNotification(content)) }
         } else startForeground(NOTIF_ID, buildNotification(content))
     }
 

@@ -39,6 +39,10 @@ class MediaHelper(private val context: Context) {
 
     private val contentResolver: ContentResolver = context.contentResolver
 
+    companion object {
+        private const val MAX_MEDIA_ITEMS = 500 // Limit to avoid loading thousands of items (#14)
+    }
+
     /**
      * Lists all images and videos from MediaStore.
      */
@@ -73,8 +77,8 @@ class MediaHelper(private val context: Context) {
                 val dataColumn = it.getColumnIndexOrThrow(MediaStore.MediaColumns.DATA)
                 val dateColumn = it.getColumnIndexOrThrow(MediaStore.MediaColumns.DATE_ADDED)
                 val mimeColumn = it.getColumnIndexOrThrow(MediaStore.MediaColumns.MIME_TYPE)
-
-                while (it.moveToNext()) {
+                var count = 0
+                while (it.moveToNext() && count < MAX_MEDIA_ITEMS) {
                     val id = it.getLong(idColumn)
                     val name = it.getString(nameColumn)
                     val path = it.getString(dataColumn)
@@ -92,6 +96,7 @@ class MediaHelper(private val context: Context) {
                             path = path
                         )
                     )
+                    count++
                 }
             }
         }

@@ -12,7 +12,8 @@ class WebRtcManager(
     private val context: Context,
     private val onSignalingMessage: (JSONObject) -> Unit,
     private val onStateChange: (State) -> Unit = {},
-    private val onVideoTrack: (VideoTrack?) -> Unit = {},
+    private val onVideoTrack: (VideoTrack) -> Unit = {},
+    private val onRemoveVideoTrack: (VideoTrack) -> Unit = {},
     private val onDataChannelMessage: (String) -> Unit = {},
     private val onMediaBinaryMessage: (ByteArray) -> Unit = {},
     private val onMediaJsonMessage: (String) -> Unit = {},
@@ -25,6 +26,23 @@ class WebRtcManager(
         private const val TAG = "WebRtcManager"
         private const val DEFAULT_STUN = "stun:stun.l.google.com:19302"
 
+        @Volatile
+        private var factoryInitialized = false
+
+        /** Ensures PeerConnectionFactory.initialize() is called exactly once per process (#23) */
+        private fun initializeOnce(context: Context) {
+            if (!factoryInitialized) {
+                synchronized(WebRtcManager::class.java) {
+                    if (!factoryInitialized) {
+                        val options = PeerConnectionFactory.InitializationOptions.builder(context.applicationContext)
+                            .setEnableInternalTracer(true)
+                            .createInitializationOptions()
+                        PeerConnectionFactory.initialize(options)
+                        factoryInitialized = true
+                    }
+                }
+            }
+        }
 
         fun isEmulator(): Boolean {
             return (android.os.Build.FINGERPRINT.startsWith("generic")
@@ -38,10 +56,10 @@ class WebRtcManager(
         }
     }
 
-    enum class Role { LISTENER, STREAMER, SCREEN_LISTENER, SCREEN_STREAMER, MEDIA_PROVIDER, MEDIA_CONSUMER }
+    enum class Role { LISTENER, STREAMER, SCREEN_LISTENER, SCREEN_STREAMER, MEDIA_PROVIDER, MEDIA_CONSUMER, CAMERA_STREAMER, CAMERA_LISTENER }
 
 
-    private val eglBase = EglBase.create()
+    private val eglBase: EglBase by lazy { EglBase.create() } // Lazy creation (#21)
     private var peerConnectionFactory: PeerConnectionFactory? = null
     private var peerConnection: PeerConnection? = null
     private var localAudioSource: AudioSource? = null
@@ -53,7 +71,9 @@ class WebRtcManager(
     private var mediaChannel: DataChannel? = null
     var role: Role = Role.LISTENER
     private var videoCapturer: VideoCapturer? = null
+    private var secondaryVideoCapturer: VideoCapturer? = null
     private var surfaceTextureHelper: SurfaceTextureHelper? = null
+    private var secondarySurfaceTextureHelper: SurfaceTextureHelper? = null
     private val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main + kotlinx.coroutines.SupervisorJob())
 
     
@@ -61,15 +81,8 @@ class WebRtcManager(
         private set
 
     init {
-        initPeerConnectionFactory(context)
+        initializeOnce(context)
         peerConnectionFactory = createPeerConnectionFactory()
-    }
-
-    private fun initPeerConnectionFactory(context: Context) {
-        val options = PeerConnectionFactory.InitializationOptions.builder(context)
-            .setEnableInternalTracer(true)
-            .createInitializationOptions()
-        PeerConnectionFactory.initialize(options)
     }
 
     private fun createPeerConnectionFactory(): PeerConnectionFactory {
@@ -92,7 +105,7 @@ class WebRtcManager(
             .createPeerConnectionFactory()
     }
 
-    fun start(role: Role, mediaProjectionIntent: android.content.Intent? = null) {
+    fun start(role: Role, mediaProjectionIntent: android.content.Intent? = null, cameraMode: String = "front") {
         this.role = role
         state = State.CONNECTING
         onStateChange(State.CONNECTING)
@@ -172,7 +185,7 @@ class WebRtcManager(
                 }
                 override fun onRenegotiationNeeded() {
                     Log.d(TAG, "onRenegotiationNeeded")
-                    if (this@WebRtcManager.role == Role.STREAMER || this@WebRtcManager.role == Role.SCREEN_STREAMER || this@WebRtcManager.role == Role.MEDIA_PROVIDER) {
+                    if (this@WebRtcManager.role == Role.STREAMER || this@WebRtcManager.role == Role.SCREEN_STREAMER || this@WebRtcManager.role == Role.MEDIA_PROVIDER || this@WebRtcManager.role == Role.CAMERA_STREAMER) {
                         createOffer()
                     }
                 }
@@ -184,7 +197,6 @@ class WebRtcManager(
                     val track = transceiver?.receiver?.track()
                     Log.d(TAG, "onTrack: ${track?.kind()}")
                     if (track is VideoTrack) {
-                        remoteVideoTrack = track
                         onVideoTrack(track)
                     }
                 }
@@ -202,7 +214,7 @@ class WebRtcManager(
                 override fun onRemoveStream(stream: MediaStream?) {}
             })
 
-            if (this@WebRtcManager.role == Role.SCREEN_STREAMER || this@WebRtcManager.role == Role.STREAMER || this@WebRtcManager.role == Role.MEDIA_PROVIDER) {
+            if (this@WebRtcManager.role == Role.SCREEN_STREAMER || this@WebRtcManager.role == Role.STREAMER || this@WebRtcManager.role == Role.MEDIA_PROVIDER || this@WebRtcManager.role == Role.CAMERA_STREAMER) {
                 setupDataChannelInitiator()
             }
 
@@ -213,6 +225,8 @@ class WebRtcManager(
                 Role.LISTENER -> setupListener()
                 Role.MEDIA_PROVIDER -> setupMediaProvider()
                 Role.MEDIA_CONSUMER -> setupMediaConsumer()
+                Role.CAMERA_STREAMER -> setupCameraStreamer(cameraMode)
+                Role.CAMERA_LISTENER -> setupCameraListener()
             }
         }
     }
@@ -228,7 +242,6 @@ class WebRtcManager(
 
     private fun setupStreamer() {
         setupAudioTrack()
-        peerConnection?.addTrack(localAudioTrack, listOf("ARDAMS"))
     }
 
     private fun setupAudioTrack() {
@@ -236,6 +249,12 @@ class WebRtcManager(
             val audioConstraints = MediaConstraints()
             localAudioSource = peerConnectionFactory?.createAudioSource(audioConstraints)
             localAudioTrack = peerConnectionFactory?.createAudioTrack("ARDAMSa0", localAudioSource)
+        }
+        
+        // Ensure it's added to the peer connection exactly once (#CrashFix)
+        val hasAudioTrack = peerConnection?.senders?.any { it.track()?.id() == "ARDAMSa0" } == true
+        if (!hasAudioTrack && localAudioTrack != null) {
+            peerConnection?.addTrack(localAudioTrack, listOf("ARDAMS"))
         }
     }
 
@@ -308,8 +327,90 @@ class WebRtcManager(
 
             // Audio
             setupAudioTrack()
-            peerConnection?.addTrack(localAudioTrack, listOf("ARDAMS"))
         }
+    }
+
+    private var currentCameraMode: String = "front"
+
+    private fun setupCameraStreamer(mode: String) {
+        currentCameraMode = mode
+        Log.d(TAG, "setupCameraStreamer mode=$mode")
+        
+        setupAudioTrack()
+
+        val enumerator = Camera2Enumerator(context)
+        val deviceNames = enumerator.deviceNames
+        var front: String? = null
+        var back: String? = null
+        for (device in deviceNames) {
+            if (enumerator.isFrontFacing(device)) front = device
+            if (enumerator.isBackFacing(device)) back = device
+        }
+
+        if (mode == "front" || mode == "both") {
+            front?.let { dev ->
+                videoCapturer = enumerator.createCapturer(dev, null)
+                surfaceTextureHelper = SurfaceTextureHelper.create("CamFront", eglBase.eglBaseContext)
+                localVideoSource = peerConnectionFactory?.createVideoSource(false)
+                videoCapturer?.initialize(surfaceTextureHelper, context, localVideoSource?.capturerObserver)
+                videoCapturer?.startCapture(640, 480, 24)
+                localVideoTrack = peerConnectionFactory?.createVideoTrack("CAMF0", localVideoSource)
+                peerConnection?.addTrack(localVideoTrack, listOf("ARDAMS"))
+            }
+        }
+
+        if (mode == "back" || mode == "both") {
+            back?.let { dev ->
+                val primaryCapturer = if (mode == "back") videoCapturer else secondaryVideoCapturer
+                if (mode == "back") {
+                    videoCapturer = enumerator.createCapturer(dev, null)
+                    surfaceTextureHelper = SurfaceTextureHelper.create("CamBack", eglBase.eglBaseContext)
+                    localVideoSource = peerConnectionFactory?.createVideoSource(false)
+                    videoCapturer?.initialize(surfaceTextureHelper, context, localVideoSource?.capturerObserver)
+                    videoCapturer?.startCapture(640, 480, 24)
+                    localVideoTrack = peerConnectionFactory?.createVideoTrack("CAMB0", localVideoSource)
+                    peerConnection?.addTrack(localVideoTrack, listOf("ARDAMS"))
+                } else {
+                    secondaryVideoCapturer = enumerator.createCapturer(dev, null)
+                    secondarySurfaceTextureHelper = SurfaceTextureHelper.create("CamBack2", eglBase.eglBaseContext)
+                    val secSource = peerConnectionFactory?.createVideoSource(false)
+                    secondaryVideoCapturer?.initialize(secondarySurfaceTextureHelper, context, secSource?.capturerObserver)
+                    secondaryVideoCapturer?.startCapture(480, 360, 24)
+                    val secTrack = peerConnectionFactory?.createVideoTrack("CAMB1", secSource)
+                    peerConnection?.addTrack(secTrack, listOf("ARDAMS"))
+                }
+            }
+        }
+    }
+
+    private fun setupCameraListener() {
+        Log.d(TAG, "setupCameraListener")
+        peerConnection?.addTransceiver(MediaStreamTrack.MediaType.MEDIA_TYPE_AUDIO, RtpTransceiver.RtpTransceiverInit(RtpTransceiver.RtpTransceiverDirection.RECV_ONLY))
+        peerConnection?.addTransceiver(MediaStreamTrack.MediaType.MEDIA_TYPE_VIDEO, RtpTransceiver.RtpTransceiverInit(RtpTransceiver.RtpTransceiverDirection.RECV_ONLY))
+        // allow for second video track in case of 'both'
+        peerConnection?.addTransceiver(MediaStreamTrack.MediaType.MEDIA_TYPE_VIDEO, RtpTransceiver.RtpTransceiverInit(RtpTransceiver.RtpTransceiverDirection.RECV_ONLY))
+    }
+
+    fun switchCamera(mode: String) {
+        if (role != Role.CAMERA_STREAMER) return
+        Log.d(TAG, "switchCamera to $mode")
+        
+        // Full stop of video capture and tracks, and restart
+        videoCapturer?.stopCapture()
+        videoCapturer?.dispose()
+        videoCapturer = null
+        secondaryVideoCapturer?.stopCapture()
+        secondaryVideoCapturer?.dispose()
+        secondaryVideoCapturer = null
+        
+        val senders = peerConnection?.senders ?: emptyList()
+        for (sender in senders) {
+            if (sender.track() is VideoTrack) {
+                peerConnection?.removeTrack(sender)
+            }
+        }
+        
+        setupCameraStreamer(mode)
     }
 
     private fun tuneScreenTrackParameters(sender: RtpSender) {
@@ -454,8 +555,8 @@ class WebRtcManager(
                 Log.d(TAG, "Offer onSetSuccess (remote)")
                 createAnswer()
             }
-            override fun onCreateFailure(p0: String?) {}
-            override fun onSetFailure(p0: String?) {}
+            override fun onCreateFailure(p0: String?) { Log.e(TAG, "Offer setRemoteDescription onCreateFailure: $p0") }
+            override fun onSetFailure(p0: String?) { Log.e(TAG, "Offer setRemoteDescription onSetFailure: $p0") }
         }, sdp)
     }
 
@@ -475,15 +576,15 @@ class WebRtcManager(
                         }
                         onSignalingMessage(json)
                     }
-                    override fun onCreateFailure(p0: String?) {}
-                    override fun onSetFailure(p0: String?) {}
+                    override fun onCreateFailure(p0: String?) { Log.e(TAG, "Answer setLocalDescription onCreateFailure: $p0") }
+                    override fun onSetFailure(p0: String?) { Log.e(TAG, "Answer setLocalDescription onSetFailure: $p0") }
                 }, sdp)
             }
             override fun onSetSuccess() {}
             override fun onCreateFailure(error: String?) {
                 Log.e(TAG, "Answer onCreateFailure: $error")
             }
-            override fun onSetFailure(error: String?) {}
+            override fun onSetFailure(error: String?) { Log.e(TAG, "Answer createAnswer onSetFailure: $error") }
         }, constraints)
     }
 
@@ -493,8 +594,8 @@ class WebRtcManager(
             override fun onSetSuccess() {
                 Log.d(TAG, "Answer onSetSuccess (remote)")
             }
-            override fun onCreateFailure(p0: String?) {}
-            override fun onSetFailure(p0: String?) {}
+            override fun onCreateFailure(p0: String?) { Log.e(TAG, "Answer setRemoteDescription onCreateFailure: $p0") }
+            override fun onSetFailure(p0: String?) { Log.e(TAG, "Answer setRemoteDescription onSetFailure: $p0") }
         }, sdp)
     }
 
@@ -502,28 +603,44 @@ class WebRtcManager(
         Log.d(TAG, "Stopping WebRtcManager")
         state = State.IDLE
         onStateChange(State.IDLE)
+
+        // 1. Stop and dispose capturers first (they feed into sources)
         videoCapturer?.stopCapture()
         videoCapturer?.dispose()
         videoCapturer = null
         surfaceTextureHelper?.dispose()
         surfaceTextureHelper = null
+        secondaryVideoCapturer?.stopCapture()
+        secondaryVideoCapturer?.dispose()
+        secondaryVideoCapturer = null
+        secondarySurfaceTextureHelper?.dispose()
+        secondarySurfaceTextureHelper = null
+
+        // 2. Remove tracks from peer connection before closing it (#6)
+        peerConnection?.senders?.forEach { sender ->
+            try { peerConnection?.removeTrack(sender) } catch (_: Exception) {}
+        }
+
+        // 3. Close data channels
         dataChannel?.dispose()
         dataChannel = null
         mediaChannel?.dispose()
         mediaChannel = null
+
+        // 4. Close peer connection
         peerConnection?.dispose()
         peerConnection = null
-        localAudioSource?.dispose()
-        localAudioSource = null
+
+        // 5. Now safe to dispose sources and tracks
         localAudioTrack?.dispose()
         localAudioTrack = null
-        localVideoSource?.dispose()
-        localVideoSource = null
+        localAudioSource?.dispose()
+        localAudioSource = null
         localVideoTrack?.dispose()
         localVideoTrack = null
+        localVideoSource?.dispose()
+        localVideoSource = null
         remoteVideoTrack = null
-        onVideoTrack(null)
-        onStateChange(State.IDLE)
     }
 
     fun dispose() {

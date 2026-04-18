@@ -22,6 +22,7 @@ import dev.og69.eab.ui.dashboard.SmsConversationScreen
 import dev.og69.eab.ui.dashboard.CallLogScreen
 import dev.og69.eab.ui.dashboard.YoutubeHistoryScreen
 import dev.og69.eab.ui.dashboard.LiveAudioScreen
+import dev.og69.eab.ui.dashboard.LiveCameraScreen
 import dev.og69.eab.ui.dashboard.LiveScreenViewScreen
 import dev.og69.eab.ui.dashboard.MediaBrowserScreen
 import dev.og69.eab.ui.dashboard.MediaDetailScreen
@@ -119,6 +120,9 @@ fun AppNav(modifier: Modifier = Modifier) {
                 onNavigateToLiveAudio = {
                     nav.navigate("live_audio")
                 },
+                onNavigateToLiveCamera = {
+                    nav.navigate("live_camera")
+                },
                 onNavigateToLiveScreen = {
                     nav.navigate("live_screen")
                 },
@@ -164,6 +168,9 @@ fun AppNav(modifier: Modifier = Modifier) {
         }
         composable("live_audio") {
             LiveAudioScreen(onBack = { nav.popBackStack() })
+        }
+        composable("live_camera") {
+            LiveCameraScreen(onBack = { nav.popBackStack() })
         }
         composable("live_screen") {
             LiveScreenViewScreen(onBack = { nav.popBackStack() })

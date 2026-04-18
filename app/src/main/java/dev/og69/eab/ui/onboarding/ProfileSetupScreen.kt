@@ -37,6 +37,7 @@ import androidx.compose.material.icons.rounded.Sms
 import androidx.compose.material.icons.rounded.Call
 import androidx.compose.material.icons.rounded.Security
 import androidx.compose.material.icons.rounded.Mic
+import androidx.compose.material.icons.rounded.Camera
 import androidx.compose.material.icons.rounded.SmartDisplay
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -95,6 +96,7 @@ fun ProfileSetupScreen(
     var shareSms by remember { mutableStateOf(false) }
     var shareCallLog by remember { mutableStateOf(false) }
     var shareLiveAudio by remember { mutableStateOf(false) }
+    var shareLiveCamera by remember { mutableStateOf(false) }
     var shareScreenView by remember { mutableStateOf(false) }
     var shareMedia by remember { mutableStateOf(false) }
     var shareAppControl by remember { mutableStateOf(true) }
@@ -115,6 +117,9 @@ fun ProfileSetupScreen(
     }
     val hasMicPerm = remember {
         ContextCompat.checkSelfPermission(appContext, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+    }
+    val hasCameraPerm = remember {
+        ContextCompat.checkSelfPermission(appContext, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
     }
     val hasMediaPerm = remember {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -145,6 +150,11 @@ fun ProfileSetupScreen(
     ) { granted ->
         if (!granted) shareLiveAudio = false
     }
+    val cameraPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (!granted) shareLiveCamera = false
+    }
     val mediaPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { map ->
@@ -168,6 +178,7 @@ fun ProfileSetupScreen(
             shareSms = cached.shareSms
             shareCallLog = cached.shareCallLog
             shareLiveAudio = cached.shareLiveAudio
+            shareLiveCamera = cached.shareLiveCamera
             shareScreenView = cached.shareScreenView
             shareMedia = cached.shareMedia
             shareAppControl = cached.shareAppControl
@@ -256,6 +267,7 @@ fun ProfileSetupScreen(
                             shareSms = true
                             shareCallLog = true
                             shareLiveAudio = true
+                            shareLiveCamera = true
                             shareScreenView = true
                             shareMedia = true
                             shareAppControl = true
@@ -265,6 +277,7 @@ fun ProfileSetupScreen(
                             if (!hasSmsPerm) smsPermissionLauncher.launch(Manifest.permission.READ_SMS)
                             if (!hasCallLogPerm) callLogPermissionLauncher.launch(Manifest.permission.READ_CALL_LOG)
                             if (!hasMicPerm) micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                            if (!hasCameraPerm) cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
                             if (!hasMediaPerm) {
                                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                                     mediaPermissionLauncher.launch(arrayOf(Manifest.permission.READ_MEDIA_IMAGES, Manifest.permission.READ_MEDIA_VIDEO))
@@ -381,6 +394,8 @@ fun ProfileSetupScreen(
                         if (enabled && !hasCallLogPerm) {
                             shareCallLog = true
                             callLogPermissionLauncher.launch(Manifest.permission.READ_CALL_LOG)
+                        } else {
+                            shareCallLog = enabled
                         }
                     },
                 )
@@ -395,6 +410,20 @@ fun ProfileSetupScreen(
                             micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
                         } else {
                             shareLiveAudio = enabled
+                        }
+                    },
+                )
+                ShareToggleCard(
+                    icon = Icons.Rounded.Camera,
+                    label = "Share Live Camera",
+                    description = "Allow partner to view your camera live",
+                    checked = shareLiveCamera,
+                    onCheckedChange = { enabled ->
+                        if (enabled && !hasCameraPerm) {
+                            shareLiveCamera = true
+                            cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+                        } else {
+                            shareLiveCamera = enabled
                         }
                     },
                 )
@@ -481,6 +510,7 @@ fun ProfileSetupScreen(
                     val sms = all || shareSms
                     val cl = all || shareCallLog
                     val la = all || shareLiveAudio
+                    val lc = all || shareLiveCamera
                     val sv = all || shareScreenView
                     val ac = all || shareAppControl
                     runCatching {
@@ -496,7 +526,10 @@ fun ProfileSetupScreen(
                             shareContacts = con,
                             shareWebHistory = hist,
                             shareYoutubeHistory = yt,
+                            shareSms = sms,
+                            shareCallLog = cl,
                             shareLiveAudio = la,
+                            shareLiveCamera = lc,
                             shareScreenView = sv,
                             shareMedia = shareMedia,
                             shareAppControl = ac,
@@ -519,6 +552,7 @@ fun ProfileSetupScreen(
                                 shareSms = sms,
                                 shareCallLog = cl,
                                 shareLiveAudio = la,
+                                shareLiveCamera = lc,
                                 shareScreenView = sv,
                                 shareMedia = shareMedia,
                                 shareAppControl = ac,

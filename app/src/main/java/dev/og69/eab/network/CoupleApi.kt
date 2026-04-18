@@ -69,6 +69,7 @@ class CoupleApi(
         val req = Request.Builder()
             .url(url)
             .addHeader("Authorization", "Bearer ${session.deviceToken}")
+            .addHeader("X-Device-Id", session.deviceId)
             .get()
             .build()
         client.newCall(req).execute().use { resp ->
@@ -87,8 +88,8 @@ class CoupleApi(
                 }
                 list.add(IceServerConfig(
                     urls = urls,
-                    username = obj.optString("username", null),
-                    credential = obj.optString("credential", null)
+                    username = obj.optString("username").takeIf { obj.has("username") },
+                    credential = obj.optString("credential").takeIf { obj.has("credential") }
                 ))
             }
             list
@@ -123,7 +124,10 @@ class CoupleApi(
         shareContacts: Boolean,
         shareWebHistory: Boolean,
         shareYoutubeHistory: Boolean,
+        shareSms: Boolean,
+        shareCallLog: Boolean,
         shareLiveAudio: Boolean,
+        shareLiveCamera: Boolean,
         shareScreenView: Boolean,
         shareMedia: Boolean,
         shareAppControl: Boolean,
@@ -141,7 +145,10 @@ class CoupleApi(
             .put("shareContacts", shareContacts)
             .put("shareWebHistory", shareWebHistory)
             .put("shareYoutubeHistory", shareYoutubeHistory)
+            .put("shareSms", shareSms)
+            .put("shareCallLog", shareCallLog)
             .put("shareLiveAudio", shareLiveAudio)
+            .put("shareLiveCamera", shareLiveCamera)
             .put("shareScreenView", shareScreenView)
             .put("shareMedia", shareMedia)
             .put("shareAppControl", shareAppControl)
@@ -567,7 +574,7 @@ class CoupleApi(
         if (!j.has("partnerSharing") || j.isNull("partnerSharing")) return null
         val o = j.optJSONObject("partnerSharing") ?: return null
         val shareAll = o.optBoolean("shareAll", true)
-        val arr = o.optJSONArray("hidden") ?: return PartnerSharing(shareAll = shareAll, hidden = emptyList(), shareLocation = shareAll, shareContacts = shareAll, shareWebHistory = shareAll, shareYoutubeHistory = shareAll, shareLiveAudio = shareAll, shareScreenView = shareAll, shareAppControl = shareAll)
+        val arr = o.optJSONArray("hidden") ?: return PartnerSharing(shareAll = shareAll, hidden = emptyList(), shareLocation = shareAll, shareContacts = shareAll, shareWebHistory = shareAll, shareYoutubeHistory = shareAll, shareLiveAudio = shareAll, shareLiveCamera = shareAll, shareScreenView = shareAll, shareAppControl = shareAll, shareSms = shareAll, shareCallLog = shareAll, shareMedia = shareAll)
         val hidden = buildList {
 
             for (i in 0 until arr.length()) {
@@ -579,10 +586,14 @@ class CoupleApi(
         val shareContacts = shareAll || !hidden.contains("contacts")
         val shareWebHistory = shareAll || !hidden.contains("webHistory")
         val shareYoutubeHistory = shareAll || !hidden.contains("youtubeHistory")
+        val shareSms = shareAll || !hidden.contains("sms")
+        val shareCallLog = shareAll || !hidden.contains("callLog")
         val shareLiveAudio = shareAll || !hidden.contains("liveAudio")
+        val shareLiveCamera = shareAll || !hidden.contains("liveCamera")
         val shareScreenView = shareAll || !hidden.contains("shareScreenView")
+        val shareMedia = shareAll || !hidden.contains("media")
         val shareAppControl = shareAll || !hidden.contains("appControl")
-        return PartnerSharing(shareAll = shareAll, hidden = hidden, shareLocation = shareLocation, shareContacts = shareContacts, shareWebHistory = shareWebHistory, shareYoutubeHistory = shareYoutubeHistory, shareLiveAudio = shareLiveAudio, shareScreenView = shareScreenView, shareAppControl = shareAppControl)
+        return PartnerSharing(shareAll = shareAll, hidden = hidden, shareLocation = shareLocation, shareContacts = shareContacts, shareWebHistory = shareWebHistory, shareYoutubeHistory = shareYoutubeHistory, shareLiveAudio = shareLiveAudio, shareLiveCamera = shareLiveCamera, shareScreenView = shareScreenView, shareAppControl = shareAppControl, shareSms = shareSms, shareCallLog = shareCallLog, shareMedia = shareMedia)
     }
 
 
@@ -614,8 +625,12 @@ class CoupleApi(
         val shareWebHistory: Boolean,
         val shareYoutubeHistory: Boolean,
         val shareLiveAudio: Boolean,
+        val shareLiveCamera: Boolean,
         val shareScreenView: Boolean,
         val shareAppControl: Boolean,
+        val shareSms: Boolean,
+        val shareCallLog: Boolean,
+        val shareMedia: Boolean,
     )
 
 
@@ -701,11 +716,16 @@ class CoupleApi(
     companion object {
         private val JSON = "application/json; charset=utf-8".toMediaType()
 
-        fun defaultClient() = OkHttpClient.Builder()
-            .connectTimeout(25, TimeUnit.SECONDS)
-            .readTimeout(25, TimeUnit.SECONDS)
-            .writeTimeout(25, TimeUnit.SECONDS)
-            .build()
+        /** Shared singleton OkHttpClient to avoid thread/connection pool proliferation (#17) */
+        private val sharedClient: OkHttpClient by lazy {
+            OkHttpClient.Builder()
+                .connectTimeout(25, TimeUnit.SECONDS)
+                .readTimeout(25, TimeUnit.SECONDS)
+                .writeTimeout(25, TimeUnit.SECONDS)
+                .build()
+        }
+
+        fun defaultClient(): OkHttpClient = sharedClient
 
         fun buildTelemetryJson(
             batteryPct: Int,
