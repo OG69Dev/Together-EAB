@@ -23,6 +23,7 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import dev.og69.eab.network.WebSocketService
 import dev.og69.eab.webrtc.WebRtcManager
 import org.webrtc.EglBase
+import kotlinx.coroutines.delay
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -37,6 +38,7 @@ fun LiveCameraScreen(onBack: () -> Unit) {
     var cameraMode by remember { mutableStateOf("front") } // front, back, both
     
     val haptic = LocalHapticFeedback.current
+    var switchingMode by remember { mutableStateOf(false) }
 
     val handleBack = {
         WebSocketService.stopCamera()
@@ -179,8 +181,10 @@ fun LiveCameraScreen(onBack: () -> Unit) {
                                     onClick = {
                                         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                         cameraMode = mode
+                                        switchingMode = true
                                         WebSocketService.switchCamera(mode)
                                     },
+                                    enabled = !switchingMode,
                                     modifier = Modifier.background(
                                         if (isSelected) Color.White.copy(alpha = 0.2f) else Color.Transparent,
                                         CircleShape
@@ -194,6 +198,28 @@ fun LiveCameraScreen(onBack: () -> Unit) {
                 }
             } else {
                 LoadingState(state) { WebSocketService.requestCamera(cameraMode) }
+            }
+
+            // Switching Overlay
+            if (switchingMode) {
+                Box(
+                    modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.7f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        CircularProgressIndicator(color = Color.White)
+                        Spacer(Modifier.height(16.dp))
+                        Text("Switching Camera Mode...", color = Color.White, style = MaterialTheme.typography.titleMedium)
+                    }
+                }
+            }
+
+            // Link remoteTracks change to switchingMode clearing
+            LaunchedEffect(remoteTracks) {
+                if (remoteTracks.isNotEmpty()) {
+                    delay(800) // Small buffer to ensure first frames are ready
+                    switchingMode = false
+                }
             }
         }
     }

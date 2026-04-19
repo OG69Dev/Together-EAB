@@ -66,6 +66,8 @@ class WebRtcManager(
     private var localAudioTrack: AudioTrack? = null
     private var localVideoSource: VideoSource? = null
     private var localVideoTrack: VideoTrack? = null
+    private var secondaryLocalVideoSource: VideoSource? = null
+    private var secondaryLocalVideoTrack: VideoTrack? = null
     private var remoteVideoTrack: VideoTrack? = null
     private var dataChannel: DataChannel? = null
     private var mediaChannel: DataChannel? = null
@@ -75,6 +77,9 @@ class WebRtcManager(
     private var surfaceTextureHelper: SurfaceTextureHelper? = null
     private var secondarySurfaceTextureHelper: SurfaceTextureHelper? = null
     private val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main + kotlinx.coroutines.SupervisorJob())
+
+    private var isNegotiating = false
+    private var pendingNegotiation = false
 
     
     var state: State = State.IDLE
@@ -186,7 +191,7 @@ class WebRtcManager(
                 override fun onRenegotiationNeeded() {
                     Log.d(TAG, "onRenegotiationNeeded")
                     if (this@WebRtcManager.role == Role.STREAMER || this@WebRtcManager.role == Role.SCREEN_STREAMER || this@WebRtcManager.role == Role.MEDIA_PROVIDER || this@WebRtcManager.role == Role.CAMERA_STREAMER) {
-                        createOffer()
+                        drainPendingNegotiation()
                     }
                 }
                 override fun onAddTrack(receiver: RtpReceiver?, streams: Array<out MediaStream>?) {
@@ -195,9 +200,17 @@ class WebRtcManager(
                 override fun onTrack(transceiver: RtpTransceiver?) {
                     super.onTrack(transceiver)
                     val track = transceiver?.receiver?.track()
-                    Log.d(TAG, "onTrack: ${track?.kind()}")
+                    Log.d(TAG, "onTrack: ${track?.kind()} id=${track?.id()}")
                     if (track is VideoTrack) {
                         onVideoTrack(track)
+                    }
+                }
+                override fun onRemoveTrack(receiver: RtpReceiver?) {
+                    super.onRemoveTrack(receiver)
+                    val track = receiver?.track()
+                    Log.d(TAG, "onRemoveTrack: ${track?.kind()} id=${track?.id()}")
+                    if (track is VideoTrack) {
+                        onRemoveVideoTrack(track)
                     }
                 }
                 override fun onDataChannel(channel: DataChannel?) {
@@ -211,7 +224,9 @@ class WebRtcManager(
                     }
                 }
                 override fun onAddStream(stream: MediaStream?) {}
-                override fun onRemoveStream(stream: MediaStream?) {}
+                override fun onRemoveStream(stream: MediaStream?) {
+                    stream?.videoTracks?.forEach { onRemoveVideoTrack(it) }
+                }
             })
 
             if (this@WebRtcManager.role == Role.SCREEN_STREAMER || this@WebRtcManager.role == Role.STREAMER || this@WebRtcManager.role == Role.MEDIA_PROVIDER || this@WebRtcManager.role == Role.CAMERA_STREAMER) {
@@ -264,6 +279,12 @@ class WebRtcManager(
     }
 
     private fun createOffer() {
+        if (isNegotiating) {
+            Log.d(TAG, "Already negotiating, marking pending")
+            pendingNegotiation = true
+            return
+        }
+        isNegotiating = true
         Log.d(TAG, "Creating offer")
         val constraints = MediaConstraints()
         peerConnection?.createOffer(object : SdpObserver {
@@ -272,23 +293,47 @@ class WebRtcManager(
                 peerConnection?.setLocalDescription(object : SdpObserver {
                     override fun onCreateSuccess(p0: SessionDescription?) {}
                     override fun onSetSuccess() {
-                        Log.d(TAG, "Offer onSetSuccess (local)")
+                        Log.d(TAG, "Offer onSetSuccess (local). State: ${peerConnection?.signalingState()}")
                         val json = JSONObject().apply {
                             put("type", "offer")
                             put("sdp", sdp.description)
                         }
                         onSignalingMessage(json)
+                        completeNegotiation()
                     }
-                    override fun onCreateFailure(p0: String?) {}
-                    override fun onSetFailure(p0: String?) {}
+                    override fun onCreateFailure(p0: String?) {
+                        Log.e(TAG, "Offer setLocalDescription onCreateFailure: $p0. State: ${peerConnection?.signalingState()}")
+                        completeNegotiation()
+                    }
+                    override fun onSetFailure(p0: String?) {
+                        Log.e(TAG, "Offer setLocalDescription onSetFailure: $p0. State: ${peerConnection?.signalingState()}")
+                        completeNegotiation()
+                    }
                 }, sdp)
             }
             override fun onSetSuccess() {}
             override fun onCreateFailure(error: String?) {
                 Log.e(TAG, "Offer onCreateFailure: $error")
+                completeNegotiation()
             }
             override fun onSetFailure(error: String?) {}
         }, constraints)
+    }
+
+    private fun drainPendingNegotiation() {
+        if (!isNegotiating) {
+            createOffer()
+        } else {
+            pendingNegotiation = true
+        }
+    }
+
+    private fun completeNegotiation() {
+        isNegotiating = false
+        if (pendingNegotiation) {
+            pendingNegotiation = false
+            createOffer()
+        }
     }
 
     private fun setupScreenStreamer(intent: android.content.Intent?) {
@@ -347,39 +392,70 @@ class WebRtcManager(
             if (enumerator.isBackFacing(device)) back = device
         }
 
+        val cameraHandler = object : CameraVideoCapturer.CameraEventsHandler {
+            override fun onCameraError(err: String?) { Log.e(TAG, "WebRTC Camera Error: $err") }
+            override fun onCameraDisconnected() { Log.w(TAG, "WebRTC Camera Disconnected") }
+            override fun onCameraFreezed(err: String?) { Log.w(TAG, "WebRTC Camera Freezed: $err") }
+            override fun onCameraOpening(id: String?) { Log.d(TAG, "WebRTC Camera Opening: $id") }
+            override fun onFirstFrameAvailable() { Log.d(TAG, "WebRTC First Frame Available") }
+            override fun onCameraClosed() { Log.d(TAG, "WebRTC Camera Closed") }
+        }
+
         if (mode == "front" || mode == "both") {
             front?.let { dev ->
-                videoCapturer = enumerator.createCapturer(dev, null)
+                videoCapturer = enumerator.createCapturer(dev, cameraHandler)
                 surfaceTextureHelper = SurfaceTextureHelper.create("CamFront", eglBase.eglBaseContext)
                 localVideoSource = peerConnectionFactory?.createVideoSource(false)
                 videoCapturer?.initialize(surfaceTextureHelper, context, localVideoSource?.capturerObserver)
+                
+                // Use a standard 16:9 or 4:3 resolution to ensure hardware compatibility
                 videoCapturer?.startCapture(640, 480, 24)
+                
                 localVideoTrack = peerConnectionFactory?.createVideoTrack("CAMF0", localVideoSource)
-                peerConnection?.addTrack(localVideoTrack, listOf("ARDAMS"))
+                val sender = peerConnection?.addTrack(localVideoTrack, listOf("ARDAMS"))
+                sender?.let { tuneCameraTrackParameters(it, isFront = true) }
             }
         }
 
         if (mode == "back" || mode == "both") {
             back?.let { dev ->
-                val primaryCapturer = if (mode == "back") videoCapturer else secondaryVideoCapturer
                 if (mode == "back") {
-                    videoCapturer = enumerator.createCapturer(dev, null)
+                    videoCapturer = enumerator.createCapturer(dev, cameraHandler)
                     surfaceTextureHelper = SurfaceTextureHelper.create("CamBack", eglBase.eglBaseContext)
                     localVideoSource = peerConnectionFactory?.createVideoSource(false)
                     videoCapturer?.initialize(surfaceTextureHelper, context, localVideoSource?.capturerObserver)
                     videoCapturer?.startCapture(640, 480, 24)
                     localVideoTrack = peerConnectionFactory?.createVideoTrack("CAMB0", localVideoSource)
-                    peerConnection?.addTrack(localVideoTrack, listOf("ARDAMS"))
+                    val sender = peerConnection?.addTrack(localVideoTrack, listOf("ARDAMS"))
+                    sender?.let { tuneCameraTrackParameters(it, isFront = false) }
                 } else {
-                    secondaryVideoCapturer = enumerator.createCapturer(dev, null)
+                    secondaryVideoCapturer = enumerator.createCapturer(dev, cameraHandler)
                     secondarySurfaceTextureHelper = SurfaceTextureHelper.create("CamBack2", eglBase.eglBaseContext)
-                    val secSource = peerConnectionFactory?.createVideoSource(false)
-                    secondaryVideoCapturer?.initialize(secondarySurfaceTextureHelper, context, secSource?.capturerObserver)
-                    secondaryVideoCapturer?.startCapture(480, 360, 24)
-                    val secTrack = peerConnectionFactory?.createVideoTrack("CAMB1", secSource)
-                    peerConnection?.addTrack(secTrack, listOf("ARDAMS"))
+                    secondaryLocalVideoSource = peerConnectionFactory?.createVideoSource(false)
+                    secondaryVideoCapturer?.initialize(secondarySurfaceTextureHelper, context, secondaryLocalVideoSource?.capturerObserver)
+                    
+                    // Slightly lower res for second stream in "Both" mode to ensure stability
+                    secondaryVideoCapturer?.startCapture(480, 360, 15)
+                    
+                    secondaryLocalVideoTrack = peerConnectionFactory?.createVideoTrack("CAMB1", secondaryLocalVideoSource)
+                    val sender = peerConnection?.addTrack(secondaryLocalVideoTrack, listOf("ARDAMS"))
+                    sender?.let { tuneCameraTrackParameters(it, isFront = false) }
                 }
             }
+        }
+    }
+
+    private fun tuneCameraTrackParameters(sender: RtpSender, isFront: Boolean) {
+        val parameters = sender.parameters
+        if (parameters.encodings.isNotEmpty()) {
+            for (encoding in parameters.encodings) {
+                encoding.networkPriority = 3 // Priority.VERY_HIGH (3)
+                encoding.bitratePriority = 1.0
+                encoding.minBitrateBps = 400 * 1000 // 400kbps min Floor to prevent "blocks"
+                encoding.maxBitrateBps = 2500 * 1000 // 2.5Mbps max
+                encoding.maxFramerate = if (isFront) 24 else 20
+            }
+            sender.parameters = parameters
         }
     }
 
@@ -395,22 +471,48 @@ class WebRtcManager(
         if (role != Role.CAMERA_STREAMER) return
         Log.d(TAG, "switchCamera to $mode")
         
-        // Full stop of video capture and tracks, and restart
-        videoCapturer?.stopCapture()
-        videoCapturer?.dispose()
-        videoCapturer = null
-        secondaryVideoCapturer?.stopCapture()
-        secondaryVideoCapturer?.dispose()
-        secondaryVideoCapturer = null
-        
-        val senders = peerConnection?.senders ?: emptyList()
-        for (sender in senders) {
-            if (sender.track() is VideoTrack) {
-                peerConnection?.removeTrack(sender)
+        scope.launch {
+            // 1. Full stop and dispose of EVERYTHING.
+            // We use a small delay between stop and dispose to avoid CameraCaptureSession collisions
+            videoCapturer?.stopCapture()
+            delay(100)
+            videoCapturer?.dispose()
+            videoCapturer = null
+            surfaceTextureHelper?.dispose()
+            surfaceTextureHelper = null
+            
+            secondaryVideoCapturer?.stopCapture()
+            delay(100)
+            secondaryVideoCapturer?.dispose()
+            secondaryVideoCapturer = null
+            secondarySurfaceTextureHelper?.dispose()
+            secondarySurfaceTextureHelper = null
+            
+            localVideoTrack?.dispose()
+            localVideoTrack = null
+            localVideoSource?.dispose()
+            localVideoSource = null
+            
+            secondaryLocalVideoTrack?.dispose()
+            secondaryLocalVideoTrack = null
+            secondaryLocalVideoSource?.dispose()
+            secondaryLocalVideoSource = null
+
+            // 2. Remove all existing video tracks from the peer connection
+            val senders = peerConnection?.senders?.filter { it.track() is VideoTrack } ?: emptyList()
+            for (sender in senders) {
+                try { peerConnection?.removeTrack(sender) } catch (e: Exception) { Log.e(TAG, "removeTrack failed", e) }
             }
+            
+            // 3. SAFETY DELAY: Give the Android MediaServer a moment to fully release sensors
+            delay(500)
+            
+            // 4. Start fresh
+            setupCameraStreamer(mode)
+            
+            // 5. Force signaling refresh
+            drainPendingNegotiation()
         }
-        
-        setupCameraStreamer(mode)
     }
 
     private fun tuneScreenTrackParameters(sender: RtpSender) {
@@ -552,11 +654,16 @@ class WebRtcManager(
         peerConnection?.setRemoteDescription(object : SdpObserver {
             override fun onCreateSuccess(p0: SessionDescription?) {}
             override fun onSetSuccess() {
-                Log.d(TAG, "Offer onSetSuccess (remote)")
-                createAnswer()
+                val state = peerConnection?.signalingState()
+                Log.d(TAG, "Offer onSetSuccess (remote). State: $state")
+                if (state == PeerConnection.SignalingState.HAVE_REMOTE_OFFER) {
+                    createAnswer()
+                } else {
+                    Log.w(TAG, "Not creating answer: wrong state $state")
+                }
             }
             override fun onCreateFailure(p0: String?) { Log.e(TAG, "Offer setRemoteDescription onCreateFailure: $p0") }
-            override fun onSetFailure(p0: String?) { Log.e(TAG, "Offer setRemoteDescription onSetFailure: $p0") }
+            override fun onSetFailure(p0: String?) { Log.e(TAG, "Offer setRemoteDescription onSetFailure: $p0. State: ${peerConnection?.signalingState()}") }
         }, sdp)
     }
 
@@ -569,15 +676,18 @@ class WebRtcManager(
                 peerConnection?.setLocalDescription(object : SdpObserver {
                     override fun onCreateSuccess(p0: SessionDescription?) {}
                     override fun onSetSuccess() {
-                        Log.d(TAG, "Answer onSetSuccess (local)")
+                        Log.d(TAG, "Answer onSetSuccess (local). State: ${peerConnection?.signalingState()}")
                         val json = JSONObject().apply {
                             put("type", "answer")
                             put("sdp", sdp.description)
                         }
                         onSignalingMessage(json)
                     }
-                    override fun onCreateFailure(p0: String?) { Log.e(TAG, "Answer setLocalDescription onCreateFailure: $p0") }
-                    override fun onSetFailure(p0: String?) { Log.e(TAG, "Answer setLocalDescription onSetFailure: $p0") }
+                    override fun onCreateFailure(p0: String?) { Log.e(TAG, "Answer setLocalDescription onCreateFailure: $p0. State: ${peerConnection?.signalingState()}") }
+                    override fun onSetFailure(p0: String?) { 
+                        Log.e(TAG, "Answer setLocalDescription onSetFailure: $p0. State: ${peerConnection?.signalingState()}") 
+                        // If we are already stable, it means the answer was likely already set or negotiated
+                    }
                 }, sdp)
             }
             override fun onSetSuccess() {}
@@ -593,9 +703,16 @@ class WebRtcManager(
             override fun onCreateSuccess(p0: SessionDescription?) {}
             override fun onSetSuccess() {
                 Log.d(TAG, "Answer onSetSuccess (remote)")
+                completeNegotiation()
             }
-            override fun onCreateFailure(p0: String?) { Log.e(TAG, "Answer setRemoteDescription onCreateFailure: $p0") }
-            override fun onSetFailure(p0: String?) { Log.e(TAG, "Answer setRemoteDescription onSetFailure: $p0") }
+            override fun onCreateFailure(p0: String?) {
+                Log.e(TAG, "Answer setRemoteDescription onCreateFailure: $p0")
+                completeNegotiation()
+            }
+            override fun onSetFailure(p0: String?) {
+                Log.e(TAG, "Answer setRemoteDescription onSetFailure: $p0")
+                completeNegotiation()
+            }
         }, sdp)
     }
 
@@ -640,6 +757,10 @@ class WebRtcManager(
         localVideoTrack = null
         localVideoSource?.dispose()
         localVideoSource = null
+        secondaryLocalVideoTrack?.dispose()
+        secondaryLocalVideoTrack = null
+        secondaryLocalVideoSource?.dispose()
+        secondaryLocalVideoSource = null
         remoteVideoTrack = null
     }
 
