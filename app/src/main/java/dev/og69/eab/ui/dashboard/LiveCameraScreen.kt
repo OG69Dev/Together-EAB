@@ -116,10 +116,17 @@ fun LiveCameraScreen(onBack: () -> Unit) {
                     LaunchedEffect(track) { try { track.setEnabled(true) } catch (e: Exception) {} }
                 } else if (trackList.size >= 2) {
                     // PiP Dual View
-                    val primary = if (isFrontPrimary) (frontTrack ?: trackList[0]) else (backTrack ?: trackList[0])
-                    val secondary = if (isFrontPrimary) (backTrack ?: trackList[1]) else (frontTrack ?: trackList[1])
+                    val primary = if (isFrontPrimary) (frontTrack ?: trackList[0]) else (backTrack ?: trackList.getOrNull(1) ?: trackList[0])
+                    val secondary = if (isFrontPrimary) (backTrack ?: trackList.getOrNull(1) ?: trackList[0]) else (frontTrack ?: trackList[0])
 
-                    Box(Modifier.fillMaxSize()) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .clickable {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                isFrontPrimary = !isFrontPrimary
+                            }
+                    ) {
                         // Main View (Bottom Layer)
                         key("primary-${primary.id()}") {
                             AndroidView(
@@ -149,10 +156,6 @@ fun LiveCameraScreen(onBack: () -> Unit) {
                                 .background(Color.Black, RoundedCornerShape(12.dp))
                                 .border(1.dp, Color.White.copy(alpha = 0.2f), RoundedCornerShape(12.dp))
                                 .clip(RoundedCornerShape(12.dp))
-                                .clickable { 
-                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                    isFrontPrimary = !isFrontPrimary 
-                                }
                         ) {
                             key("secondary-${secondary.id()}") {
                                 AndroidView(
@@ -171,6 +174,16 @@ fun LiveCameraScreen(onBack: () -> Unit) {
                                 )
                             }
                             LaunchedEffect(secondary) { try { secondary.setEnabled(true) } catch(e: Exception) {} }
+
+                            // Click overlay to ensure the tap isn't consumed by the TextureViewRenderer
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .clickable {
+                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        isFrontPrimary = !isFrontPrimary
+                                    }
+                            )
                         }
                     }
                 }

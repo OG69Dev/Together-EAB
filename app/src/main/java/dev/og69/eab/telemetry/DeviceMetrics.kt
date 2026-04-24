@@ -4,10 +4,14 @@ import android.app.usage.UsageEvents
 import android.app.usage.UsageStats
 import android.app.usage.UsageStatsManager
 import android.content.Context
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
+import android.net.wifi.WifiManager
 import android.os.BatteryManager
 import android.os.Build
 import android.os.Environment
 import android.os.StatFs
+import android.telephony.TelephonyManager
 import java.util.Calendar
 import java.util.concurrent.TimeUnit
 
@@ -114,6 +118,78 @@ object DeviceMetrics {
             ).toString()
         }.getOrDefault(pkg)
         return pkg to label
+    }
+
+    data class NetworkStatus(
+        val type: String, // "WiFi", "Mobile", "None"
+        val bars: Int,
+        val maxBars: Int
+    )
+
+    fun networkStatus(context: Context): NetworkStatus {
+        val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        
+        // Helper to evaluate a specific network's capabilities
+        fun evaluate(caps: NetworkCapabilities?): NetworkStatus? {
+            if (caps == null || !caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) return null
+            
+            return when {
+                caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) || 
+                caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) ||
+                caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI_AWARE) -> {
+                    var level = 4
+                    var max = 4
+                    try {
+                        val wm = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+                        @Suppress("DEPRECATION")
+                        val info = wm.connectionInfo
+                        if (info != null && info.rssi != -127) {
+                            level = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                                wm.calculateSignalLevel(info.rssi)
+                            } else {
+                                @Suppress("DEPRECATION")
+                                WifiManager.calculateSignalLevel(info.rssi, 5)
+                            }
+                            max = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                                wm.maxSignalLevel
+                            } else 4
+                        }
+                    } catch (_: Exception) {}
+                    NetworkStatus("WiFi", level, max)
+                }
+                caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> {
+                    var level = 0
+                    try {
+                        val tm = context.getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                            level = tm.signalStrength?.level ?: 0
+                        }
+                    } catch (_: Exception) {}
+                    NetworkStatus("Mobile", level, 4)
+                }
+                else -> null
+            }
+        }
+
+        // 1. Try active network (default)
+        val active = cm.activeNetwork
+        val activeCaps = cm.getNetworkCapabilities(active)
+        evaluate(activeCaps)?.let { return it }
+
+        // 2. If active is a VPN or null, look at all networks
+        val allNetworks = cm.allNetworks
+        for (n in allNetworks) {
+            val c = cm.getNetworkCapabilities(n)
+            evaluate(c)?.let { return it }
+        }
+
+        // 3. Last ditch: if anything has internet, call it WiFi 4/4
+        val anyInternet = allNetworks.any { 
+            cm.getNetworkCapabilities(it)?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true 
+        }
+        if (anyInternet) return NetworkStatus("WiFi", 4, 4)
+
+        return NetworkStatus("None", 0, 4)
     }
 }
 

@@ -139,6 +139,9 @@ class DashboardViewModel(app: Application) : AndroidViewModel(app) {
                     val (fgPkg, fgLabel) = withContext(Dispatchers.Default) {
                         ForegroundResolver.resolve(ctx)
                     }
+                    val net = withContext(Dispatchers.Default) {
+                        DeviceMetrics.networkStatus(ctx)
+                    }
                     val json = CoupleApi.buildTelemetryJson(
                         batteryPct = batt,
                         diskFreeBytes = free,
@@ -149,6 +152,9 @@ class DashboardViewModel(app: Application) : AndroidViewModel(app) {
                         usageTodayTotalMs = ut.todayTotalMs,
                         usageWeekTotalMs = ut.weekTotalMs,
                         usageDailyAvgMs = ut.dailyAvgMs,
+                        networkType = net.type,
+                        networkBars = net.bars,
+                        networkMaxBars = net.maxBars,
                     )
                     withContext(Dispatchers.IO) {
                         api.postTelemetry(session, json)

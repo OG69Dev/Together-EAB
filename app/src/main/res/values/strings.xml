@@ -129,5 +129,9 @@
     <string name="block_screen_subtitle">Administrator Action Required</string>
     <string name="block_screen_body">Access to %1$s has been restricted by your linked partner.</string>
     <string name="block_screen_return_home">Return to Home</string>
+    <string name="network_wifi">Wi-Fi</string>
+    <string name="network_mobile">Mobile Data</string>
+    <string name="network_none">Offline</string>
+    <string name="signal_bars">%1$d/%2$d bars</string>
 </resources>
 

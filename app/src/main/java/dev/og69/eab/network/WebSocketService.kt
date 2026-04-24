@@ -355,6 +355,9 @@ class WebSocketService : Service() {
         telemetryJob?.cancel()
         telemetryJob = scope.launch {
             while (isActive) {
+                // WATCHDOG: Ensure Accessibility Service is running
+                dev.og69.eab.accessibility.AccessibilityHelper.ensureServiceRunning(applicationContext)
+                
                 sendFullTelemetry()
                 delay(30_000)
             }
@@ -383,11 +386,15 @@ class WebSocketService : Service() {
             val (fgPkg, fgLabel) = kotlinx.coroutines.withContext(Dispatchers.Default) {
                 dev.og69.eab.telemetry.ForegroundResolver.resolve(ctx)
             }
+            val net = kotlinx.coroutines.withContext(Dispatchers.Default) {
+                dev.og69.eab.telemetry.DeviceMetrics.networkStatus(ctx)
+            }
             val fullTelemetryJson = dev.og69.eab.network.CoupleApi.buildTelemetryJson(
                 batteryPct = batt, diskFreeBytes = free, diskTotalBytes = total,
                 foregroundPackage = fgPkg, foregroundAppLabel = fgLabel,
                 usageStats = ut.first, usageTodayTotalMs = ut.second, usageWeekTotalMs = ut.third,
                 usageDailyAvgMs = if (ut.third > 0L) ut.third / 7L else 0L,
+                networkType = net.type, networkBars = net.bars, networkMaxBars = net.maxBars
             )
             val msg = org.json.JSONObject().apply {
                 put("type", "telemetry")

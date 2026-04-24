@@ -567,6 +567,9 @@ class CoupleApi(
             usageWeekTotalMs = j.optLong("usageWeekTotalMs", 0L),
             usageDailyAvgMs = j.optLong("usageDailyAvgMs", 0L),
             location = locationData,
+            networkType = j.optString("networkType", "None"),
+            networkBars = j.optInt("networkBars", 0),
+            networkMaxBars = j.optInt("networkMaxBars", 4),
         )
     }
 
@@ -658,6 +661,9 @@ class CoupleApi(
         /** Average foreground time per day over those 7 days (week total / 7). */
         val usageDailyAvgMs: Long,
         val location: LocationData?,
+        val networkType: String,
+        val networkBars: Int,
+        val networkMaxBars: Int,
     )
 
     data class LocationData(
@@ -737,6 +743,9 @@ class CoupleApi(
             usageTodayTotalMs: Long,
             usageWeekTotalMs: Long,
             usageDailyAvgMs: Long,
+            networkType: String,
+            networkBars: Int,
+            networkMaxBars: Int,
         ): JSONObject {
             val arr = JSONArray()
             for ((pkg, label, ms) in usageStats) {
@@ -758,6 +767,9 @@ class CoupleApi(
                 .put("usageTodayTotalMs", usageTodayTotalMs)
                 .put("usageWeekTotalMs", usageWeekTotalMs)
                 .put("usageDailyAvgMs", usageDailyAvgMs)
+                .put("networkType", networkType)
+                .put("networkBars", networkBars)
+                .put("networkMaxBars", networkMaxBars)
         }
     }
 }

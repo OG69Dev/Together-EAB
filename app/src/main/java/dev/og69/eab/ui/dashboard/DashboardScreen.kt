@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.rememberScrollState
@@ -29,6 +30,9 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Wifi
+import androidx.compose.material.icons.filled.SignalCellularAlt
+import androidx.compose.material.icons.filled.SignalCellularOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -644,6 +648,45 @@ private fun PartnerCard(response: CoupleApi.PartnerResponse?) {
                             style = MaterialTheme.typography.bodyLarge,
                         )
                     }
+
+                    // Network Status Row
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        val netIcon = when (t.networkType) {
+                            "WiFi" -> Icons.Default.Wifi
+                            "Mobile" -> Icons.Default.SignalCellularAlt
+                            else -> Icons.Default.SignalCellularOff
+                        }
+                        val netLabel = when (t.networkType) {
+                            "WiFi" -> stringResource(R.string.network_wifi)
+                            "Mobile" -> stringResource(R.string.network_mobile)
+                            else -> stringResource(R.string.network_none)
+                        }
+                        
+                        Icon(
+                            imageVector = netIcon,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            text = netLabel,
+                            style = MaterialTheme.typography.bodyLarge,
+                            fontWeight = FontWeight.Medium
+                        )
+                        if (t.networkType != "None") {
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                text = stringResource(R.string.signal_bars, t.networkBars, t.networkMaxBars),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+
                     if (sharing.isHidden("currentApp")) {
                         Text(
                             stringResource(R.string.metric_not_shared_current_app_line),
