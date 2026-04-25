@@ -123,6 +123,8 @@ fun DashboardScreen(
     var showUsageDialog by remember { mutableStateOf(false) }
     var showBatteryDialog by remember { mutableStateOf(false) }
     var showPermissionSheet by remember { mutableStateOf(false) }
+    var linkCode by remember { mutableStateOf<String?>(null) }
+    var generatingLinkCode by remember { mutableStateOf(false) }
 
     val permissionPrefs = remember { PermissionPreferences(appContext) }
     val activity = context as? ComponentActivity
@@ -355,6 +357,31 @@ fun DashboardScreen(
     }
 
 
+    if (linkCode != null) {
+        AlertDialog(
+            onDismissRequest = { linkCode = null },
+            title = { Text("Link a Device") },
+            text = {
+                Column {
+                    Text("Enter this code on your PC or secondary device to link it:")
+                    Spacer(Modifier.height(16.dp))
+                    Text(
+                        text = linkCode ?: "",
+                        style = MaterialTheme.typography.headlineLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.align(Alignment.CenterHorizontally)
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { linkCode = null }) {
+                    Text("Done")
+                }
+            }
+        )
+    }
+
     Scaffold(
         modifier = modifier.fillMaxSize(),
         snackbarHost = { SnackbarHost(snack) },
@@ -397,6 +424,28 @@ fun DashboardScreen(
                                 onClick = {
                                     menuOpen = false
                                     onEditProfile()
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Link a Device") },
+                                onClick = {
+                                    menuOpen = false
+                                    if (!generatingLinkCode) {
+                                        generatingLinkCode = true
+                                        scope.launch {
+                                            try {
+                                                val session = repo.getSession()
+                                                if (session != null) {
+                                                    val code = CoupleApi().generateLinkCode(session)
+                                                    linkCode = code
+                                                }
+                                            } catch (e: Exception) {
+                                                // Ignore
+                                            } finally {
+                                                generatingLinkCode = false
+                                            }
+                                        }
+                                    }
                                 },
                             )
                             DropdownMenuItem(

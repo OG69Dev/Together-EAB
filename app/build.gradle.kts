@@ -20,8 +20,8 @@ android {
         applicationId = "dev.og69.eab"
         minSdk = 26
         targetSdk = 36
-        versionCode = 14
-        versionName = "1.1.2"
+        versionCode = 15
+        versionName = "1.1.3"
         val ghOwner = (localProperties.getProperty("github.owner") ?: "").replace("\"", "\\\"")
         val ghRepo = (localProperties.getProperty("github.repo") ?: "").replace("\"", "\\\"")
         val ghToken = (localProperties.getProperty("github.token") ?: "").replace("\"", "\\\"")

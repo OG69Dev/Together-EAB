@@ -131,7 +131,7 @@ object DeviceMetrics {
         
         // Helper to evaluate a specific network's capabilities
         fun evaluate(caps: NetworkCapabilities?): NetworkStatus? {
-            if (caps == null || !caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) return null
+            if (caps == null) return null
             
             return when {
                 caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) || 
@@ -158,14 +158,18 @@ object DeviceMetrics {
                     NetworkStatus("WiFi", level, max)
                 }
                 caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> {
-                    var level = 0
+                    var level = 4
                     try {
                         val tm = context.getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                            level = tm.signalStrength?.level ?: 0
+                            level = tm.signalStrength?.level ?: 4
                         }
                     } catch (_: Exception) {}
                     NetworkStatus("Mobile", level, 4)
+                }
+                caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN) -> {
+                    // VPN hides underlying transport, just show full WiFi
+                    NetworkStatus("WiFi", 4, 4)
                 }
                 else -> null
             }
@@ -183,13 +187,8 @@ object DeviceMetrics {
             evaluate(c)?.let { return it }
         }
 
-        // 3. Last ditch: if anything has internet, call it WiFi 4/4
-        val anyInternet = allNetworks.any { 
-            cm.getNetworkCapabilities(it)?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true 
-        }
-        if (anyInternet) return NetworkStatus("WiFi", 4, 4)
-
-        return NetworkStatus("None", 0, 4)
+        // 3. Fallback: Since telemetry is sent over WebSocket, we know we are online.
+        return NetworkStatus("WiFi", 4, 4)
     }
 }
 

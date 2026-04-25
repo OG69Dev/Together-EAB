@@ -34,7 +34,9 @@ object AccessibilityHelper {
 
     /**
      * Watchdog: If the service is enabled in settings but not actually active/running,
-     * toggle the component state to force Android to re-bind it.
+     * it might have crashed. We no longer toggle the component state here because Android
+     * will permanently remove it from the enabled services list in Settings.Secure,
+     * forcing the user to manually re-enable it. We just log the occurrence.
      */
     fun ensureServiceRunning(context: Context) {
         val expected = ComponentName(context, CouplesAccessibilityService::class.java).flattenToString()
@@ -53,11 +55,7 @@ object AccessibilityHelper {
                 ?.any { it.resolveInfo.serviceInfo.packageName == context.packageName } == true
             
             if (!running) {
-                android.util.Log.w("AccessibilityHelper", "Service enabled in settings but not running. Nudging...")
-                val pm = context.packageManager
-                val component = ComponentName(context, CouplesAccessibilityService::class.java)
-                pm.setComponentEnabledSetting(component, android.content.pm.PackageManager.COMPONENT_ENABLED_STATE_DISABLED, android.content.pm.PackageManager.DONT_KILL_APP)
-                pm.setComponentEnabledSetting(component, android.content.pm.PackageManager.COMPONENT_ENABLED_STATE_ENABLED, android.content.pm.PackageManager.DONT_KILL_APP)
+                android.util.Log.w("AccessibilityHelper", "Service enabled in settings but not running. System might have killed it. User intervention required to re-enable safely without dropping permissions.")
             }
         }
     }

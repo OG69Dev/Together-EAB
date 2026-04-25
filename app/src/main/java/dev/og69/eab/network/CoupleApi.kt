@@ -64,6 +64,21 @@ class CoupleApi(
         }
     }
 
+    suspend fun generateLinkCode(session: Session): String = withContext(Dispatchers.IO) {
+        val url = "${baseUrl()}/api/couple/${session.coupleId}/generate-code"
+        val req = Request.Builder()
+            .url(url)
+            .addHeader("Authorization", "Bearer ${session.deviceToken}")
+            .post("{}".toRequestBody(JSON))
+            .build()
+        client.newCall(req).execute().use { resp ->
+            val body = resp.body?.string().orEmpty()
+            if (!resp.isSuccessful) throw ApiException(resp.code, body)
+            val j = JSONObject(body)
+            j.getString("code")
+        }
+    }
+
     suspend fun getIceServers(session: Session): List<IceServerConfig> = withContext(Dispatchers.IO) {
         val url = "${baseUrl()}/api/rtc/ice-servers"
         val req = Request.Builder()
