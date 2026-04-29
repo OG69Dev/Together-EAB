@@ -111,6 +111,7 @@ class WebRtcManager(
     }
 
     fun start(role: Role, mediaProjectionIntent: android.content.Intent? = null, cameraMode: String = "front") {
+        stop()
         this.role = role
         state = State.CONNECTING
         onStateChange(State.CONNECTING)
@@ -442,6 +443,52 @@ class WebRtcManager(
                     sender?.let { tuneCameraTrackParameters(it, isFront = false) }
                 }
             }
+        }
+    }
+
+    /**
+     * Controls the torch (flashlight) via CameraManager.
+     * Only works when the back camera is NOT actively being used for WebRTC streaming.
+     * In "front"-only mode the back camera is free, so torch works.
+     * In "back" or "both" mode the back camera is held by the capture session,
+     * so torch is unavailable (Android limitation: CAMERA_IN_USE).
+     *
+     * @param level 0 = off, 1+ = torch on (with strength on API 33+)
+     * @return true if torch was set successfully
+     */
+    fun setTorch(level: Int): Boolean {
+        if (role != Role.CAMERA_STREAMER) return false
+
+        // Torch is only possible when back camera is NOT in use by the capturer
+        if (currentCameraMode == "back" || currentCameraMode == "both") {
+            Log.w(TAG, "setTorch: Back camera in use by WebRTC (mode=$currentCameraMode), torch unavailable")
+            return false
+        }
+
+        return try {
+            val camMgr = context.getSystemService(android.content.Context.CAMERA_SERVICE) as android.hardware.camera2.CameraManager
+            // Find the back camera that has a flash unit
+            val backId = camMgr.cameraIdList.firstOrNull { id ->
+                val chars = camMgr.getCameraCharacteristics(id)
+                chars.get(android.hardware.camera2.CameraCharacteristics.LENS_FACING) == android.hardware.camera2.CameraCharacteristics.LENS_FACING_BACK &&
+                chars.get(android.hardware.camera2.CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
+            } ?: return false
+
+            if (level <= 0) {
+                camMgr.setTorchMode(backId, false)
+            } else if (android.os.Build.VERSION.SDK_INT >= 33) {
+                val chars = camMgr.getCameraCharacteristics(backId)
+                val maxLevel = chars.get(android.hardware.camera2.CameraCharacteristics.FLASH_INFO_STRENGTH_MAXIMUM_LEVEL) ?: 1
+                val clamped = level.coerceIn(1, maxLevel)
+                camMgr.turnOnTorchWithStrengthLevel(backId, clamped)
+            } else {
+                camMgr.setTorchMode(backId, true)
+            }
+            Log.d(TAG, "setTorch: level=$level applied (back camera free, mode=$currentCameraMode)")
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "setTorch failed", e)
+            false
         }
     }
 

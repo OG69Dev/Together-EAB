@@ -87,7 +87,11 @@ fun YoutubeHistoryScreen(
                 CircularProgressIndicator()
             }
         } else {
-            val list = history.orEmpty()
+            val list = history.orEmpty().filter { 
+                !it.title.equals("Your videos", ignoreCase = true) && 
+                !it.title.equals("Watch later", ignoreCase = true) &&
+                !it.title.equals("Water later", ignoreCase = true)
+            }
             if (list.isEmpty()) {
                 Box(Modifier.padding(padding).fillMaxSize(), contentAlignment = Alignment.Center) {
                     Text(

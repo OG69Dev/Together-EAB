@@ -72,6 +72,9 @@ class WebSocketService : Service() {
         val speakerphoneFlow = kotlinx.coroutines.flow.MutableStateFlow(true)
         
         val mediaBinaryFlow = kotlinx.coroutines.flow.MutableSharedFlow<Pair<Long, ByteArray>>(extraBufferCapacity = 16)
+        val brightnessFlow = kotlinx.coroutines.flow.MutableStateFlow(-1) // -1 = unknown
+        val flashlightFlow = kotlinx.coroutines.flow.MutableStateFlow(0) // 0=off, 1-max=strength
+        val flashlightMaxFlow = kotlinx.coroutines.flow.MutableStateFlow(1) // max torch strength
 
         private var instance: WebSocketService? = null
         private var screenCaptureIntent: android.content.Intent? = null
@@ -123,6 +126,20 @@ class WebSocketService : Service() {
             })
         }
 
+        fun setBrightness(level: Int) {
+            instance?.sendSignaling(org.json.JSONObject().apply {
+                put("type", "set_brightness")
+                put("level", level.coerceIn(0, 255))
+            })
+        }
+
+        fun setFlashlight(level: Int) {
+            instance?.sendSignaling(org.json.JSONObject().apply {
+                put("type", "set_flashlight")
+                put("level", level)
+            })
+        }
+
         fun stopCamera() {
             instance?.stopCamera()
             instance?.sendSignaling(org.json.JSONObject().put("type", "stop_camera"))
@@ -171,10 +188,14 @@ class WebSocketService : Service() {
                 putExtra(EXTRA_COUPLE_ID, session.coupleId)
                 putExtra(EXTRA_DEVICE_TOKEN, session.deviceToken)
             }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                context.startForegroundService(intent)
-            } else {
-                context.startService(intent)
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    context.startForegroundService(intent)
+                } else {
+                    context.startService(intent)
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to start service", e)
             }
         }
 
@@ -265,6 +286,34 @@ class WebSocketService : Service() {
             connect()
         }
         startLocationTracking()
+        
+        // Broadcast brightness and flashlight changes to partner
+        scope.launch {
+            brightnessFlow.collect { level ->
+                if (level != -1) {
+                    sendSignaling(org.json.JSONObject().apply {
+                        put("type", "brightness_changed")
+                        put("level", level)
+                    })
+                }
+            }
+        }
+        scope.launch {
+            flashlightFlow.collect { level ->
+                sendSignaling(org.json.JSONObject().apply {
+                    put("type", "flashlight_changed")
+                    put("level", level)
+                })
+            }
+        }
+        scope.launch {
+            flashlightMaxFlow.collect { max ->
+                sendSignaling(org.json.JSONObject().apply {
+                    put("type", "flashlight_max")
+                    put("max", max)
+                })
+            }
+        }
 
         // IMMEDIATE POLICY APPLICATION (from cache)
         scope.launch {
@@ -359,7 +408,7 @@ class WebSocketService : Service() {
                 dev.og69.eab.accessibility.AccessibilityHelper.ensureServiceRunning(applicationContext)
                 
                 sendFullTelemetry()
-                delay(30_000)
+                delay(20_000)
             }
         }
     }
@@ -543,7 +592,25 @@ class WebSocketService : Service() {
                     }
                     "GET_THUMBNAIL" -> {
                         val id = json.getLong("id")
-                        val item = mediaHelper?.getMediaList()?.find { it.id == id }
+                        val mediaType = json.optString("media_type")
+                        
+                        val item = if (mediaType.isNotEmpty()) {
+                            val collection = if (mediaType == "video") 
+                                android.provider.MediaStore.Video.Media.EXTERNAL_CONTENT_URI 
+                            else 
+                                android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+                            dev.og69.eab.data.MediaItem(
+                                id = id,
+                                uri = android.net.Uri.withAppendedPath(collection, id.toString()),
+                                name = "",
+                                type = mediaType,
+                                dateAdded = 0L,
+                                path = ""
+                            )
+                        } else {
+                            mediaHelper?.getMediaList()?.find { it.id == id }
+                        }
+                        
                         item?.let {
                             val thumb = mediaHelper?.getThumbnail(it)
                             if (thumb != null) {
@@ -591,19 +658,38 @@ class WebSocketService : Service() {
         scope.launch {
             val list = mediaHelper?.getMediaList() ?: emptyList()
             Log.d(TAG, "sendMediaList: found ${list.size} items")
-            val array = org.json.JSONArray()
-            list.forEach { 
-                array.put(org.json.JSONObject().apply {
-                    put("id", it.id)
-                    put("name", it.name)
-                    put("type", it.type)
-                    put("date", it.dateAdded)
-                })
+            
+            if (list.isEmpty()) {
+                webRtcManager?.sendMediaJson(org.json.JSONObject().apply {
+                    put("type", "MEDIA_LIST")
+                    put("items", org.json.JSONArray())
+                }.toString())
+                return@launch
             }
-            webRtcManager?.sendMediaJson(org.json.JSONObject().apply {
-                put("type", "MEDIA_LIST")
-                put("items", array)
-            }.toString())
+
+            val chunkSize = 50
+            val chunks = list.chunked(chunkSize)
+            
+            chunks.forEachIndexed { index, chunk ->
+                val array = org.json.JSONArray()
+                chunk.forEach { 
+                    array.put(org.json.JSONObject().apply {
+                        put("id", it.id)
+                        put("name", it.name)
+                        put("type", it.type)
+                        put("date", it.dateAdded)
+                    })
+                }
+                webRtcManager?.sendMediaJson(org.json.JSONObject().apply {
+                    put("type", "MEDIA_LIST_CHUNK")
+                    put("items", array)
+                    put("is_last", index == chunks.lastIndex)
+                    put("is_first", index == 0)
+                }.toString())
+                
+                // Small delay to prevent overwhelming the DataChannel buffer
+                delay(50)
+            }
         }
     }
 
@@ -795,6 +881,76 @@ class WebSocketService : Service() {
                         }
                         "stop_audio" -> stopAudio()
                         "stop_screen" -> stopScreen()
+                        "set_brightness" -> {
+                            val level = payload.optInt("level", -1)
+                            if (level in 0..255) {
+                                scope.launch(Dispatchers.Main) {
+                                    try {
+                                        if (android.provider.Settings.System.canWrite(applicationContext)) {
+                                            android.provider.Settings.System.putInt(
+                                                contentResolver,
+                                                android.provider.Settings.System.SCREEN_BRIGHTNESS_MODE,
+                                                android.provider.Settings.System.SCREEN_BRIGHTNESS_MODE_MANUAL
+                                            )
+                                            android.provider.Settings.System.putInt(
+                                                contentResolver,
+                                                android.provider.Settings.System.SCREEN_BRIGHTNESS,
+                                                level
+                                            )
+                                            brightnessFlow.value = level
+                                        }
+                                    } catch (e: Exception) { Log.e(TAG, "set_brightness failed", e) }
+                                }
+                            }
+                        }
+                        "set_flashlight" -> {
+                            val level = payload.optInt("level", 0)
+                            // Update max level info
+                            if (Build.VERSION.SDK_INT >= 33) {
+                                try {
+                                    val camMgr = getSystemService(Context.CAMERA_SERVICE) as android.hardware.camera2.CameraManager
+                                    val backId = camMgr.cameraIdList.firstOrNull { id ->
+                                        val chars = camMgr.getCameraCharacteristics(id)
+                                        chars.get(android.hardware.camera2.CameraCharacteristics.LENS_FACING) == android.hardware.camera2.CameraCharacteristics.LENS_FACING_BACK &&
+                                        chars.get(android.hardware.camera2.CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
+                                    }
+                                    if (backId != null) {
+                                        flashlightMaxFlow.value = camMgr.getCameraCharacteristics(backId)
+                                            .get(android.hardware.camera2.CameraCharacteristics.FLASH_INFO_STRENGTH_MAXIMUM_LEVEL) ?: 1
+                                    }
+                                } catch (_: Exception) {}
+                            }
+
+                            val mgr = webRtcManager
+                            if (mgr != null && mgr.role == WebRtcManager.Role.CAMERA_STREAMER) {
+                                // Camera is active — setTorch handles checking if back cam is free
+                                val ok = mgr.setTorch(level)
+                                if (ok) {
+                                    flashlightFlow.value = level.coerceAtLeast(0)
+                                }
+                                // If not ok, back cam is in use — torch unavailable (silently ignored)
+                            } else {
+                                // No active camera session — use CameraManager directly
+                                scope.launch {
+                                    try {
+                                        val camMgr = getSystemService(Context.CAMERA_SERVICE) as android.hardware.camera2.CameraManager
+                                        val backId = camMgr.cameraIdList.firstOrNull { id ->
+                                            camMgr.getCameraCharacteristics(id)
+                                                .get(android.hardware.camera2.CameraCharacteristics.LENS_FACING) == android.hardware.camera2.CameraCharacteristics.LENS_FACING_BACK
+                                        } ?: return@launch
+                                        if (level <= 0) {
+                                            camMgr.setTorchMode(backId, false)
+                                        } else if (Build.VERSION.SDK_INT >= 33) {
+                                            val maxLevel = flashlightMaxFlow.value.coerceAtLeast(1)
+                                            camMgr.turnOnTorchWithStrengthLevel(backId, level.coerceIn(1, maxLevel))
+                                        } else {
+                                            camMgr.setTorchMode(backId, true)
+                                        }
+                                        flashlightFlow.value = level.coerceAtLeast(0)
+                                    } catch (e: Exception) { Log.e(TAG, "set_flashlight failed", e) }
+                                }
+                            }
+                        }
                         "stop_camera" -> stopCamera()
                         "stop_media" -> actuallyStopMedia()
                         "app_block_attempt" -> {
@@ -821,12 +977,46 @@ class WebSocketService : Service() {
     private fun updateForegroundService(content: String) {
         if (Build.VERSION.SDK_INT >= 29) {
             var type = android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
-            if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) type = type or android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
-            if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) type = type or android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
-            if (Build.VERSION.SDK_INT >= 30 && ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) type = type or android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA
-            if (screenCaptureIntent != null) type = type or android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
-            try { startForeground(NOTIF_ID, buildNotification(content), type) } catch (e: Exception) { Log.e(TAG, "updateForegroundService failed", e); startForeground(NOTIF_ID, buildNotification(content)) }
-        } else startForeground(NOTIF_ID, buildNotification(content))
+            
+            val role = webRtcManager?.role
+            if (role == dev.og69.eab.webrtc.WebRtcManager.Role.STREAMER) {
+                if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+                    type = type or android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+                }
+            }
+            if (role == dev.og69.eab.webrtc.WebRtcManager.Role.CAMERA_STREAMER && Build.VERSION.SDK_INT >= 30) {
+                if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
+                    type = type or android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA
+                }
+            }
+            if (role == dev.og69.eab.webrtc.WebRtcManager.Role.SCREEN_STREAMER && screenCaptureIntent != null) {
+                type = type or android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+            }
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
+                if (Build.VERSION.SDK_INT < 34 || ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_BACKGROUND_LOCATION) == PackageManager.PERMISSION_GRANTED) {
+                    type = type or android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
+                }
+            }
+
+            try { 
+                startForeground(NOTIF_ID, buildNotification(content), type) 
+            } catch (e: Exception) { 
+                Log.e(TAG, "updateForegroundService failed with type $type", e)
+                try {
+                    startForeground(NOTIF_ID, buildNotification(content), android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+                } catch (e2: Exception) {
+                    Log.e(TAG, "updateForegroundService fallback failed", e2)
+                    stopSelf()
+                }
+            }
+        } else {
+            try {
+                startForeground(NOTIF_ID, buildNotification(content))
+            } catch (e: Exception) {
+                Log.e(TAG, "updateForegroundService legacy failed", e)
+                stopSelf()
+            }
+        }
     }
 
     private fun buildNotification(subtitle: String): Notification {

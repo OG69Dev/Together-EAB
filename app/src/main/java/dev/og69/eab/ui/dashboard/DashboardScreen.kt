@@ -122,6 +122,7 @@ fun DashboardScreen(
     var showA11yDialog by remember { mutableStateOf(false) }
     var showUsageDialog by remember { mutableStateOf(false) }
     var showBatteryDialog by remember { mutableStateOf(false) }
+    var showWriteSettingsDialog by remember { mutableStateOf(false) }
     var showPermissionSheet by remember { mutableStateOf(false) }
     var linkCode by remember { mutableStateOf<String?>(null) }
     var generatingLinkCode by remember { mutableStateOf(false) }
@@ -181,8 +182,11 @@ fun DashboardScreen(
         val pm = context.getSystemService(Context.POWER_SERVICE) as PowerManager
         pm.isIgnoringBatteryOptimizations(context.packageName)
     }
+    val writeSettingsEnabled = remember(resumeVersion) {
+        Settings.System.canWrite(context)
+    }
 
-    LaunchedEffect(consentAccepted, resumeVersion, a11yEnabled, usageEnabled) {
+    LaunchedEffect(consentAccepted, resumeVersion, a11yEnabled, usageEnabled, batteryIgnored, writeSettingsEnabled) {
         if (consentAccepted != true) {
             showA11yDialog = false
             showUsageDialog = false
@@ -192,21 +196,32 @@ fun DashboardScreen(
             !a11yEnabled -> {
                 showA11yDialog = true
                 showUsageDialog = false
+                showBatteryDialog = false
+                showWriteSettingsDialog = false
             }
             !usageEnabled -> {
                 showA11yDialog = false
                 showUsageDialog = true
                 showBatteryDialog = false
+                showWriteSettingsDialog = false
             }
             !batteryIgnored -> {
                 showA11yDialog = false
                 showUsageDialog = false
                 showBatteryDialog = true
+                showWriteSettingsDialog = false
+            }
+            !writeSettingsEnabled -> {
+                showA11yDialog = false
+                showUsageDialog = false
+                showBatteryDialog = false
+                showWriteSettingsDialog = true
             }
             else -> {
                 showA11yDialog = false
                 showUsageDialog = false
                 showBatteryDialog = false
+                showWriteSettingsDialog = false
             }
         }
     }
@@ -321,6 +336,34 @@ fun DashboardScreen(
             },
             dismissButton = {
                 TextButton(onClick = { showBatteryDialog = false }) {
+                    Text(stringResource(R.string.dialog_later))
+                }
+            },
+        )
+    }
+
+    if (consentAccepted == true && showWriteSettingsDialog && !writeSettingsEnabled) {
+        AlertDialog(
+            onDismissRequest = { showWriteSettingsDialog = false },
+            title = { Text("Remote Brightness Control") },
+            text = { Text("To allow your partner to remotely adjust this phone's screen brightness, please grant the 'Modify System Settings' permission.") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showWriteSettingsDialog = false
+                        try {
+                            val intent = Intent(Settings.ACTION_MANAGE_WRITE_SETTINGS).apply {
+                                data = Uri.parse("package:${context.packageName}")
+                            }
+                            context.startActivity(intent)
+                        } catch (e: Exception) {
+                            context.startActivity(Intent(Settings.ACTION_MANAGE_WRITE_SETTINGS))
+                        }
+                    },
+                ) { Text("Grant Permission") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showWriteSettingsDialog = false }) {
                     Text(stringResource(R.string.dialog_later))
                 }
             },

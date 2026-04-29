@@ -37,6 +37,7 @@ fun MediaBrowserScreen(
     
     var items by remember { mutableStateOf<List<Triple<Long, String, String>>>(emptyList()) } // ID, name, Type
     val thumbnails = remember { mutableStateMapOf<Long, ByteArray>() }
+    val requestedThumbnails = remember { mutableSetOf<Long>() }
     var isLoading by remember { mutableStateOf(true) }
     val connectionState by WebSocketService.mediaStateFlow.collectAsState()
 
@@ -51,6 +52,26 @@ fun MediaBrowserScreen(
         WebSocketService.requestMedia()
         WebSocketService.signalingFlow.collect { payload ->
             when (payload.optString("type")) {
+                "MEDIA_LIST_CHUNK" -> {
+                    val arr = payload.optJSONArray("items")
+                    val isFirst = payload.optBoolean("is_first", false)
+                    val isLast = payload.optBoolean("is_last", false)
+                    
+                    val newList = if (isFirst) mutableListOf() else items.toMutableList()
+                    
+                    if (arr != null) {
+                        for (i in 0 until arr.length()) {
+                            val obj = arr.getJSONObject(i)
+                            val id = obj.getLong("id")
+                            newList.add(Triple(id, obj.getString("name"), obj.getString("type")))
+                        }
+                    }
+                    items = newList
+                    
+                    if (isLast) {
+                        isLoading = false
+                    }
+                }
                 "MEDIA_LIST" -> {
                     val arr = payload.optJSONArray("items")
                     val newList = mutableListOf<Triple<Long, String, String>>()
@@ -62,19 +83,6 @@ fun MediaBrowserScreen(
                     }
                     items = newList
                     isLoading = false
-                    
-                    // Logic for thumbnails: Use cache if available, else request
-                    newList.forEach { (id, _, _) ->
-                        val cached = cacheManager.getThumbnail(id)
-                        if (cached != null) {
-                            thumbnails[id] = cached
-                        } else {
-                            WebSocketService.sendMediaCommand(JSONObject().apply {
-                                put("type", "GET_THUMBNAIL")
-                                put("id", id)
-                            }.toString())
-                        }
-                    }
                 }
             }
         }
@@ -99,6 +107,9 @@ fun MediaBrowserScreen(
                 actions = {
                     IconButton(onClick = { 
                         isLoading = true
+                        items = emptyList()
+                        thumbnails.clear()
+                        requestedThumbnails.clear()
                         WebSocketService.requestMedia() 
                     }) {
                         Icon(Icons.Rounded.Refresh, contentDescription = "Refresh")
@@ -123,8 +134,27 @@ fun MediaBrowserScreen(
                     horizontalArrangement = Arrangement.spacedBy(4.dp),
                     verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    items(items) { (id, name, type) ->
-                        MediaGridItem(id, type, thumbnails[id], onClick = { onOpenItem(id) })
+                    items(items, key = { it.first }) { (id, name, type) ->
+                        MediaGridItem(
+                            id = id, 
+                            type = type, 
+                            thumbnail = thumbnails[id], 
+                            onRequestThumbnail = {
+                                if (requestedThumbnails.add(id)) {
+                                    val cached = cacheManager.getThumbnail(id)
+                                    if (cached != null) {
+                                        thumbnails[id] = cached
+                                    } else {
+                                        WebSocketService.sendMediaCommand(JSONObject().apply {
+                                            put("type", "GET_THUMBNAIL")
+                                            put("id", id)
+                                            put("media_type", type)
+                                        }.toString())
+                                    }
+                                }
+                            },
+                            onClick = { onOpenItem(id) }
+                        )
                     }
                 }
             }
@@ -133,7 +163,13 @@ fun MediaBrowserScreen(
 }
 
 @Composable
-private fun MediaGridItem(id: Long, type: String, thumbnail: ByteArray?, onClick: () -> Unit) {
+private fun MediaGridItem(id: Long, type: String, thumbnail: ByteArray?, onRequestThumbnail: () -> Unit, onClick: () -> Unit) {
+    LaunchedEffect(id) {
+        if (thumbnail == null) {
+            onRequestThumbnail()
+        }
+    }
+
     Box(Modifier.aspectRatio(1f).background(MaterialTheme.colorScheme.surfaceVariant).clickable(onClick = onClick)) {
         if (thumbnail != null) {
             val bitmap = remember(thumbnail) {

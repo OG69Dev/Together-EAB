@@ -14,6 +14,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.platform.LocalContext
@@ -43,9 +44,63 @@ fun LiveCameraScreen(onBack: () -> Unit) {
     var switchingMode by remember { mutableStateOf(false) }
     var isFrontPrimary by remember { mutableStateOf(false) }
 
+    // Dimmer / flashlight state
+    var showDimmer by remember { mutableStateOf(false) }
+    var brightnessLevel by remember { mutableFloatStateOf(128f) }
+    val flashlightLevel by WebSocketService.flashlightFlow.collectAsState()
+    val flashlightMax by WebSocketService.flashlightMaxFlow.collectAsState()
+    var flashSlider by remember { mutableFloatStateOf(0f) }
+
     val handleBack = {
         WebSocketService.stopCamera()
         onBack()
+    }
+
+    // Permission check for Remote Brightness Control (WRITE_SETTINGS)
+    var showPermissionDialog by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        if (!android.provider.Settings.System.canWrite(context)) {
+            showPermissionDialog = true
+        }
+    }
+
+    if (showPermissionDialog) {
+        AlertDialog(
+            onDismissRequest = { showPermissionDialog = false },
+            icon = { Icon(Icons.Rounded.BrightnessLow, null, tint = Color(0xFFFBBF24)) },
+            title = { Text("Remote Brightness Control") },
+            text = { 
+                Text("To allow your partner to remotely adjust this phone's screen brightness, you need to grant the 'Modify System Settings' permission.") 
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showPermissionDialog = false
+                        try {
+                            val intent = android.content.Intent(android.provider.Settings.ACTION_MANAGE_WRITE_SETTINGS).apply {
+                                data = android.net.Uri.parse("package:${context.packageName}")
+                                addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                            }
+                            context.startActivity(intent)
+                        } catch (e: Exception) {
+                            // Fallback if the specific package URI fails
+                            context.startActivity(android.content.Intent(android.provider.Settings.ACTION_MANAGE_WRITE_SETTINGS))
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFBBF24), contentColor = Color.Black)
+                ) {
+                    Text("Grant Permission")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showPermissionDialog = false }) {
+                    Text("Not Now", color = Color.White.copy(alpha = 0.6f))
+                }
+            },
+            containerColor = Color(0xFF1A1A1A),
+            titleContentColor = Color.White,
+            textContentColor = Color.White.copy(alpha = 0.8f)
+        )
     }
 
     Scaffold(
@@ -188,6 +243,158 @@ fun LiveCameraScreen(onBack: () -> Unit) {
                     }
                 }
 
+                // Dimmer Panel (collapsible, above toolbar)
+                AnimatedVisibility(
+                    visible = showDimmer,
+                    enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
+                    exit = slideOutVertically(targetOffsetY = { it }) + fadeOut(),
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(bottom = 100.dp)
+                ) {
+                    Surface(
+                        shape = RoundedCornerShape(20.dp),
+                        color = Color.Black.copy(alpha = 0.75f),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.1f))
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(horizontal = 20.dp, vertical = 14.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            // Screen Brightness
+                            val canWriteSettings = android.provider.Settings.System.canWrite(context)
+                            
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                modifier = Modifier.alpha(if (canWriteSettings) 1f else 0.5f)
+                            ) {
+                                Text(
+                                    "Screen Brightness",
+                                    color = Color.White.copy(alpha = 0.7f),
+                                    style = MaterialTheme.typography.labelMedium
+                                )
+                                if (!canWriteSettings) {
+                                    Text(
+                                        "Permission required for remote control",
+                                        color = Color(0xFFF87171),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        modifier = Modifier.padding(top = 2.dp)
+                                    )
+                                }
+                                Spacer(Modifier.height(8.dp))
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.fillMaxWidth(0.85f)
+                                ) {
+                                    Icon(
+                                        Icons.Rounded.BrightnessLow,
+                                        contentDescription = null,
+                                        tint = Color.White.copy(alpha = 0.5f),
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Slider(
+                                        value = brightnessLevel,
+                                        onValueChange = { brightnessLevel = it },
+                                        onValueChangeFinished = {
+                                            WebSocketService.setBrightness(brightnessLevel.toInt())
+                                        },
+                                        enabled = canWriteSettings,
+                                        valueRange = 0f..255f,
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .padding(horizontal = 8.dp),
+                                        colors = SliderDefaults.colors(
+                                            thumbColor = Color(0xFFFBBF24),
+                                            activeTrackColor = Color(0xFFFBBF24),
+                                            inactiveTrackColor = Color.White.copy(alpha = 0.15f)
+                                        )
+                                    )
+                                    Icon(
+                                        Icons.Rounded.BrightnessHigh,
+                                        contentDescription = null,
+                                        tint = Color(0xFFFBBF24),
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                                Spacer(Modifier.height(4.dp))
+                                Text(
+                                    "${(brightnessLevel / 255f * 100f).toInt()}%",
+                                    color = Color(0xFFFBBF24),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+
+                            // Flashlight Dimmer
+                            val flashUnavailable = cameraMode == "back" || cameraMode == "both"
+                            
+                            Spacer(Modifier.height(14.dp))
+                            HorizontalDivider(color = Color.White.copy(alpha = 0.1f))
+                            Spacer(Modifier.height(10.dp))
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                modifier = Modifier.alpha(if (flashUnavailable) 0.5f else 1f)
+                            ) {
+                                Text(
+                                    "Flashlight",
+                                    color = Color.White.copy(alpha = 0.7f),
+                                    style = MaterialTheme.typography.labelMedium
+                                )
+                                if (flashUnavailable) {
+                                    Text(
+                                        "Unavailable when back camera is active",
+                                        color = Color(0xFFF87171),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        modifier = Modifier.padding(top = 2.dp)
+                                    )
+                                }
+                                Spacer(Modifier.height(8.dp))
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.fillMaxWidth(0.85f)
+                                ) {
+                                    Icon(
+                                        Icons.Rounded.FlashlightOff,
+                                        contentDescription = null,
+                                        tint = Color.White.copy(alpha = 0.5f),
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Slider(
+                                        value = flashSlider,
+                                        onValueChange = { flashSlider = it },
+                                        onValueChangeFinished = {
+                                            WebSocketService.setFlashlight(flashSlider.toInt())
+                                        },
+                                        enabled = !flashUnavailable,
+                                        valueRange = 0f..flashlightMax.toFloat().coerceAtLeast(1f),
+                                        steps = (flashlightMax - 1).coerceAtLeast(0),
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .padding(horizontal = 8.dp),
+                                        colors = SliderDefaults.colors(
+                                            thumbColor = Color(0xFFFF9800),
+                                            activeTrackColor = Color(0xFFFF9800),
+                                            inactiveTrackColor = Color.White.copy(alpha = 0.15f)
+                                        )
+                                    )
+                                    Icon(
+                                        Icons.Rounded.FlashlightOn,
+                                        contentDescription = null,
+                                        tint = Color(0xFFFF9800),
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                                Text(
+                                    if (flashSlider.toInt() == 0) "Off" else "${flashSlider.toInt()}/${flashlightMax}",
+                                    color = Color(0xFFFF9800),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+                    }
+                }
+
                 // Camera Controls Toolbar
                 Box(
                     modifier = Modifier
@@ -200,15 +407,11 @@ fun LiveCameraScreen(onBack: () -> Unit) {
                         border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.1f))
                     ) {
                         Row(
-                            modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp),
-                            horizontalArrangement = Arrangement.spacedBy(16.dp),
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text(
-                                "Mode:",
-                                color = Color.White,
-                                style = MaterialTheme.typography.labelLarge
-                            )
+                            // Camera mode buttons
                             listOf("front" to Icons.Rounded.CameraFront, "back" to Icons.Rounded.CameraRear, "both" to Icons.Rounded.Cameraswitch).forEach { (mode, icon) ->
                                 val isSelected = cameraMode == mode
                                 IconButton(
@@ -226,6 +429,57 @@ fun LiveCameraScreen(onBack: () -> Unit) {
                                 ) {
                                     Icon(icon, contentDescription = mode, tint = if (isSelected) Color.White else Color.White.copy(alpha = 0.5f))
                                 }
+                            }
+
+                            // Separator
+                            Box(
+                                modifier = Modifier
+                                    .width(1.dp)
+                                    .height(28.dp)
+                                    .background(Color.White.copy(alpha = 0.15f))
+                            )
+
+                            // Dimmer toggle
+                            IconButton(
+                                onClick = {
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    showDimmer = !showDimmer
+                                },
+                                modifier = Modifier.background(
+                                    if (showDimmer) Color(0xFFFBBF24).copy(alpha = 0.25f) else Color.Transparent,
+                                    CircleShape
+                                )
+                            ) {
+                                Icon(
+                                    Icons.Rounded.BrightnessHigh,
+                                    contentDescription = "Dimmer",
+                                    tint = if (showDimmer) Color(0xFFFBBF24) else Color.White.copy(alpha = 0.5f)
+                                )
+                            }
+
+                            // Flashlight quick toggle (tap to toggle full/off)
+                            IconButton(
+                                onClick = {
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    if (flashlightLevel > 0) {
+                                        flashSlider = 0f
+                                        WebSocketService.setFlashlight(0)
+                                    } else {
+                                        val maxVal = flashlightMax.toFloat().coerceAtLeast(1f)
+                                        flashSlider = maxVal
+                                        WebSocketService.setFlashlight(flashlightMax)
+                                    }
+                                },
+                                modifier = Modifier.background(
+                                    if (flashlightLevel > 0) Color(0xFFFF9800).copy(alpha = 0.25f) else Color.Transparent,
+                                    CircleShape
+                                )
+                            ) {
+                                Icon(
+                                    Icons.Rounded.FlashlightOn,
+                                    contentDescription = "Flashlight",
+                                    tint = if (flashlightLevel > 0) Color(0xFFFF9800) else Color.White.copy(alpha = 0.5f)
+                                )
                             }
                         }
                     }

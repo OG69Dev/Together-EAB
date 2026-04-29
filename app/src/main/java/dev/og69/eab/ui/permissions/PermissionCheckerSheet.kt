@@ -135,6 +135,26 @@ fun PermissionCheckerSheet(
                     context.startActivity(intent)
                 },
             )
+            HorizontalDivider(Modifier.padding(vertical = 12.dp))
+            val writeSettingsGranted = android.provider.Settings.System.canWrite(context)
+            PermissionRow(
+                title = "Remote Brightness Control",
+                description = "Allows your partner to remotely adjust your screen brightness.",
+                granted = writeSettingsGranted,
+                grantedLabel = stringResource(R.string.permission_status_on),
+                deniedLabel = stringResource(R.string.permission_status_off),
+                onOpenSettings = {
+                    try {
+                        val intent = Intent(Settings.ACTION_MANAGE_WRITE_SETTINGS).apply {
+                            data = android.net.Uri.parse("package:${context.packageName}")
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        }
+                        context.startActivity(intent)
+                    } catch (e: Exception) {
+                        context.startActivity(Intent(Settings.ACTION_MANAGE_WRITE_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                    }
+                },
+            )
         }
     }
 }

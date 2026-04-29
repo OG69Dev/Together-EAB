@@ -267,7 +267,7 @@ fun SmsConversationScreen(
 
 @Composable
 private fun MessageBubble(item: CoupleApi.SmsItem) {
-    val timeFmt = remember { SimpleDateFormat("h:mm a", Locale.getDefault()) }
+    val timeFmt = remember { SimpleDateFormat("MMM d, h:mm a", Locale.getDefault()) }
     val alignment = if (item.isIncoming) Alignment.Start else Alignment.End
     val bgColor = if (item.isIncoming)
         MaterialTheme.colorScheme.surfaceVariant

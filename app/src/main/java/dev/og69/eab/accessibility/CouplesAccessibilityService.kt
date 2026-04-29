@@ -221,31 +221,35 @@ class CouplesAccessibilityService : AccessibilityService() {
     }
 
     private fun shouldBlockSettingsAction(node: AccessibilityNodeInfo): Boolean {
-        // Look for our app name or package name in the current screen (#13: package name check works in all locales)
-        val hasAppName = findTextRecursive(node, "Together EAB") || findTextRecursive(node, packageName)
-        val isUninstalling = findTextRecursive(node, "Uninstall") || 
-                             findTextRecursive(node, "Deactivate") || 
-                             findTextRecursive(node, "Force stop") ||
-                             findTextRecursive(node, "Disable")
-
-        // If we see our app name and a destructive action button, block it.
-        if (hasAppName && isUninstalling) return true
+        val allText = StringBuilder()
+        collectAllText(node, allText)
+        val textStr = allText.toString().lowercase()
         
-        // Also block if we are in the Accessibility settings for Together
-        val isA11ySettings = findTextRecursive(node, "Accessibility")
-        if (isA11ySettings && hasAppName) return true
+        val hasAppName = textStr.contains("together eab") || textStr.contains(packageName.lowercase())
+        if (!hasAppName) return false
+        
+        val isUninstalling = textStr.contains("uninstall") || 
+                             textStr.contains("deactivate") || 
+                             textStr.contains("force stop") ||
+                             textStr.contains("disable")
+                             
+        if (isUninstalling) return true
+        
+        val isA11ySettings = textStr.contains("accessibility")
+        if (isA11ySettings) return true
         
         return false
     }
 
-    private fun findTextRecursive(node: AccessibilityNodeInfo, text: String): Boolean {
+    private fun collectAllText(node: AccessibilityNodeInfo, builder: StringBuilder) {
         val nodeText = node.text?.toString() ?: node.contentDescription?.toString()
-        if (nodeText?.contains(text, ignoreCase = true) == true) return true
+        if (!nodeText.isNullOrBlank()) {
+            builder.append(nodeText).append(" ")
+        }
         for (i in 0 until node.childCount) {
             val child = node.getChild(i) ?: continue
-            if (findTextRecursive(child, text)) return true
+            collectAllText(child, builder)
         }
-        return false
     }
 
     private fun extractYoutubeTitle(root: AccessibilityNodeInfo) {

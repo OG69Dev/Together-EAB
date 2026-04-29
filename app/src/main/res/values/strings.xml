@@ -23,7 +23,7 @@
     <string name="current_app_usage_hint">Uses Accessibility for live updates. If it stays blank, also turn on Usage access — we use the same kind of data as Screen Time to estimate what is on screen.</string>
     <string name="partner_app_usage_sub">Time in each app today — same idea as Apple Screen Time / Android Digital Wellbeing.</string>
     <string name="partner_screen_time_section_title">Partner Screen Time</string>
-    <string name="partner_screen_time_not_shared_sub">Your partner chose not to share Screen Time–style data. Each period would look like the tiles below.</string>
+    <string name="partner_screen_time_not_shared_sub">Your partner chose not to share Screen Time style data. Each period would look like the tiles below.</string>
     <string name="partner_screen_time_tile_today">Today</string>
     <string name="partner_screen_time_tile_week">This week</string>
     <string name="partner_screen_time_tile_daily">Daily</string>
@@ -49,7 +49,7 @@
     <string name="permission_row_accessibility">Accessibility</string>
     <string name="permission_row_accessibility_desc">Lets your partner see which app is on screen in near real time.</string>
     <string name="permission_row_usage">Screen Time / app usage</string>
-    <string name="permission_row_usage_desc">Per-app time today and summary tiles — same idea as Digital Wellbeing.</string>
+    <string name="permission_row_usage_desc">Per app time today and summary tiles same idea as Digital Wellbeing.</string>
     <string name="permission_row_notifications">Notifications</string>
     <string name="permission_row_notifications_desc">So we can alert you when an app update is available.</string>
     <string name="permission_row_notifications_desc_legacy">Manage notification categories in system settings. Runtime “notification permission” is not used on this Android version.</string>
@@ -71,7 +71,7 @@
     <string name="profile_share_battery">Battery level</string>
     <string name="profile_share_storage">Storage free / total</string>
     <string name="profile_share_current_app">Current app</string>
-    <string name="profile_share_screen_time">Screen Time list (per-app time today)</string>
+    <string name="profile_share_screen_time">Screen Time list (per app time today)</string>
     <string name="profile_share_app_control">Share App Control</string>
     <string name="profile_share_app_control_desc">Allows your partner to see and restrict your apps.</string>
     <string name="profile_save_continue">Save &amp; continue</string>
@@ -116,9 +116,9 @@
     <string name="app_control_allow">Allow</string>
     <string name="app_control_eab_header">App security</string>
     <string name="app_control_prevent_uninstall">Prevent uninstallation</string>
-    <string name="app_control_prevent_uninstall_desc">Lock Together-EAB so it cannot be deleted.</string>
+    <string name="app_control_prevent_uninstall_desc">Lock Together EAB so it cannot be deleted.</string>
     <string name="app_control_restrict_eab">Restrict app access</string>
-    <string name="app_control_restrict_eab_desc">Block your partner from opening Together-EAB.</string>
+    <string name="app_control_restrict_eab_desc">Block your partner from opening Together EAB.</string>
 
     <string name="permission_row_admin">Administration mode</string>
     <string name="permission_row_admin_desc">Allows you to remotely lock the app to prevent uninstallation.</string>

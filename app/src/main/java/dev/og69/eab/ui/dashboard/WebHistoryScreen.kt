@@ -89,7 +89,9 @@ fun WebHistoryScreen(
                 CircularProgressIndicator()
             }
         } else {
-            val list = history.orEmpty()
+            val list = history.orEmpty().filter { 
+                !it.title.equals("Search...", ignoreCase = true)
+            }
             if (list.isEmpty()) {
                 Box(Modifier.padding(padding).fillMaxSize(), contentAlignment = Alignment.Center) {
                     Text(

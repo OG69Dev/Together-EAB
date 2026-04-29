@@ -130,8 +130,10 @@ fun MediaDetailScreen(
                 }
             } else if (fullData != null) {
                 // Try to show as image first
-                val bitmap = remember(fullData) {
-                    try {
+                val isVideo = mimeType.startsWith("video")
+                val bitmap = remember(fullData, isVideo) {
+                    if (isVideo) null 
+                    else try {
                         android.graphics.BitmapFactory.decodeByteArray(fullData, 0, fullData!!.size)
                     } catch (e: Exception) { null }
                 }
@@ -144,30 +146,28 @@ fun MediaDetailScreen(
                         contentScale = ContentScale.Fit
                     )
                 } else {
-                    // Video playback or unknown format
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Icon(Icons.Default.ArrowBack, null, tint = Color.White, modifier = Modifier.size(64.dp))
-                        Spacer(Modifier.height(16.dp))
-                        Text("Media Cached Locally", color = Color.White)
-                        Text("Use a video player to view this file.", color = Color.White.copy(alpha = 0.7f))
-                        
-                        Button(onClick = {
-                            val file = cacheManager.getFile(mediaId)
-                            if (file != null) {
-                                // Simple intent to open video
-                                try {
-                                    val uri = androidx.core.content.FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
-                                    val intent = Intent(Intent.ACTION_VIEW).apply {
-                                        setDataAndType(uri, "video/*")
-                                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                                    }
-                                    context.startActivity(intent)
-                                } catch (e: Exception) {
-                                    e.printStackTrace()
+                    val file = cacheManager.getFile(mediaId)
+                    if (file != null && file.exists()) {
+                        androidx.compose.ui.viewinterop.AndroidView(
+                            factory = { ctx ->
+                                android.widget.VideoView(ctx).apply {
+                                    val uri = androidx.core.content.FileProvider.getUriForFile(ctx, "${ctx.packageName}.fileprovider", file)
+                                    setVideoURI(uri)
+                                    val mediaController = android.widget.MediaController(ctx)
+                                    mediaController.setAnchorView(this)
+                                    setMediaController(mediaController)
+                                    setOnPreparedListener { start() }
                                 }
-                            }
-                        }) {
-                            Text("Open in Player")
+                            },
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    } else {
+                        // Unknown format or missing file
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Icon(Icons.Default.ArrowBack, null, tint = Color.White, modifier = Modifier.size(64.dp))
+                            Spacer(Modifier.height(16.dp))
+                            Text("Media Cached Locally", color = Color.White)
+                            Text("Could not load media viewer.", color = Color.White.copy(alpha = 0.7f))
                         }
                     }
                 }
