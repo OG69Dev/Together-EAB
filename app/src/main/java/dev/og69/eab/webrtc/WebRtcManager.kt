@@ -81,6 +81,8 @@ class WebRtcManager(
     private var isNegotiating = false
     private var pendingNegotiation = false
 
+    // Buffer for signaling messages that arrive before PeerConnection is ready
+    private val pendingSignaling = mutableListOf<JSONObject>()
     
     var state: State = State.IDLE
         private set
@@ -112,6 +114,7 @@ class WebRtcManager(
 
     fun start(role: Role, mediaProjectionIntent: android.content.Intent? = null, cameraMode: String = "front") {
         stop()
+        pendingSignaling.clear()
         this.role = role
         state = State.CONNECTING
         onStateChange(State.CONNECTING)
@@ -244,6 +247,9 @@ class WebRtcManager(
                 Role.CAMERA_STREAMER -> setupCameraStreamer(cameraMode)
                 Role.CAMERA_LISTENER -> setupCameraListener()
             }
+
+            // Drain any signaling messages that arrived while PeerConnection was being created
+            drainPendingSignaling()
         }
     }
 
@@ -479,8 +485,12 @@ class WebRtcManager(
             } else if (android.os.Build.VERSION.SDK_INT >= 33) {
                 val chars = camMgr.getCameraCharacteristics(backId)
                 val maxLevel = chars.get(android.hardware.camera2.CameraCharacteristics.FLASH_INFO_STRENGTH_MAXIMUM_LEVEL) ?: 1
-                val clamped = level.coerceIn(1, maxLevel)
-                camMgr.turnOnTorchWithStrengthLevel(backId, clamped)
+                if (maxLevel > 1) {
+                    val clamped = level.coerceIn(1, maxLevel)
+                    camMgr.turnOnTorchWithStrengthLevel(backId, clamped)
+                } else {
+                    camMgr.setTorchMode(backId, true)
+                }
             } else {
                 camMgr.setTorchMode(backId, true)
             }
@@ -657,6 +667,29 @@ class WebRtcManager(
     fun onRemoteSignalingPayload(json: JSONObject) {
         val type = json.optString("type")
         Log.d(TAG, "Received remote signaling: $type")
+        
+        // Buffer offer/answer/candidate if PeerConnection isn't ready yet
+        if (peerConnection == null && (type == "offer" || type == "answer" || type == "candidate")) {
+            Log.d(TAG, "PeerConnection not ready, buffering signaling: $type")
+            pendingSignaling.add(json)
+            return
+        }
+        
+        processSignalingPayload(json)
+    }
+
+    private fun drainPendingSignaling() {
+        if (pendingSignaling.isEmpty()) return
+        Log.d(TAG, "Draining ${pendingSignaling.size} buffered signaling messages")
+        val pending = pendingSignaling.toList()
+        pendingSignaling.clear()
+        for (msg in pending) {
+            processSignalingPayload(msg)
+        }
+    }
+
+    private fun processSignalingPayload(json: JSONObject) {
+        val type = json.optString("type")
         when (type) {
             "offer" -> {
                 val sdp = SessionDescription(SessionDescription.Type.OFFER, json.getString("sdp"))

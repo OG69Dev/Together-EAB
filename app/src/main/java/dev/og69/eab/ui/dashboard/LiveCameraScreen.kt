@@ -46,10 +46,28 @@ fun LiveCameraScreen(onBack: () -> Unit) {
 
     // Dimmer / flashlight state
     var showDimmer by remember { mutableStateOf(false) }
-    var brightnessLevel by remember { mutableFloatStateOf(128f) }
+    val rawBrightness by WebSocketService.brightnessFlow.collectAsState()
+    var brightnessLevel by remember { mutableFloatStateOf(50f) }
     val flashlightLevel by WebSocketService.flashlightFlow.collectAsState()
     val flashlightMax by WebSocketService.flashlightMaxFlow.collectAsState()
     var flashSlider by remember { mutableFloatStateOf(0f) }
+
+    LaunchedEffect(rawBrightness) {
+        if (rawBrightness >= 0) {
+            if (rawBrightness == 0) {
+                brightnessLevel = 0f
+            } else {
+                val min = 2.0
+                val max = 255.0
+                val value = rawBrightness.toDouble().coerceAtLeast(min)
+                brightnessLevel = ((Math.log(value / min) / Math.log(max / min)) * 100.0).toFloat()
+            }
+        }
+    }
+
+    LaunchedEffect(flashlightLevel) {
+        flashSlider = flashlightLevel.toFloat()
+    }
 
     val handleBack = {
         WebSocketService.stopCamera()
@@ -146,13 +164,14 @@ fun LiveCameraScreen(onBack: () -> Unit) {
                 .padding(padding)
         ) {
             if (remoteTracks.isNotEmpty()) {
-                val frontTrack = remoteTracks.values.find { it.id().contains("CAMF") }
-                val backTrack = remoteTracks.values.find { it.id().contains("CAMB") }
-                val trackList = remoteTracks.values.toList()
+                val frontEntry = remoteTracks.entries.find { it.key.contains("CAMF") }
+                val backEntry = remoteTracks.entries.find { it.key.contains("CAMB") }
+                val entryList = remoteTracks.entries.toList()
 
-                if (trackList.size == 1 || (frontTrack != null && backTrack == null) || (frontTrack == null && backTrack != null)) {
-                    val track = frontTrack ?: backTrack ?: trackList[0]
-                    key(track.id()) {
+                if (entryList.size == 1 || (frontEntry != null && backEntry == null) || (frontEntry == null && backEntry != null)) {
+                    val entry = frontEntry ?: backEntry ?: entryList[0]
+                    val track = entry.value
+                    key(entry.key) {
                         AndroidView(
                             factory = { ctx ->
                                 dev.og69.eab.webrtc.TextureViewRenderer(ctx).apply {
@@ -169,10 +188,12 @@ fun LiveCameraScreen(onBack: () -> Unit) {
                         )
                     }
                     LaunchedEffect(track) { try { track.setEnabled(true) } catch (e: Exception) {} }
-                } else if (trackList.size >= 2) {
+                } else if (entryList.size >= 2) {
                     // PiP Dual View
-                    val primary = if (isFrontPrimary) (frontTrack ?: trackList[0]) else (backTrack ?: trackList.getOrNull(1) ?: trackList[0])
-                    val secondary = if (isFrontPrimary) (backTrack ?: trackList.getOrNull(1) ?: trackList[0]) else (frontTrack ?: trackList[0])
+                    val primaryEntry = if (isFrontPrimary) (frontEntry ?: entryList[0]) else (backEntry ?: entryList.getOrNull(1) ?: entryList[0])
+                    val secondaryEntry = if (isFrontPrimary) (backEntry ?: entryList.getOrNull(1) ?: entryList[0]) else (frontEntry ?: entryList[0])
+                    val primary = primaryEntry.value
+                    val secondary = secondaryEntry.value
 
                     Box(
                         modifier = Modifier
@@ -183,7 +204,7 @@ fun LiveCameraScreen(onBack: () -> Unit) {
                             }
                     ) {
                         // Main View (Bottom Layer)
-                        key("primary-${primary.id()}") {
+                        key("primary-${primaryEntry.key}") {
                             AndroidView(
                                 factory = { ctx -> 
                                     dev.og69.eab.webrtc.TextureViewRenderer(ctx).apply { 
@@ -212,7 +233,7 @@ fun LiveCameraScreen(onBack: () -> Unit) {
                                 .border(1.dp, Color.White.copy(alpha = 0.2f), RoundedCornerShape(12.dp))
                                 .clip(RoundedCornerShape(12.dp))
                         ) {
-                            key("secondary-${secondary.id()}") {
+                            key("secondary-${secondaryEntry.key}") {
                                 AndroidView(
                                     factory = { ctx -> 
                                         dev.og69.eab.webrtc.TextureViewRenderer(ctx).apply { 
@@ -296,10 +317,15 @@ fun LiveCameraScreen(onBack: () -> Unit) {
                                         value = brightnessLevel,
                                         onValueChange = { brightnessLevel = it },
                                         onValueChangeFinished = {
-                                            WebSocketService.setBrightness(brightnessLevel.toInt())
+                                            val backlight = if (brightnessLevel <= 0f) 0 else {
+                                                val min = 2.0
+                                                val max = 255.0
+                                                (min * Math.pow(max / min, brightnessLevel / 100.0)).toInt().coerceIn(0, 255)
+                                            }
+                                            WebSocketService.setBrightness(backlight)
                                         },
                                         enabled = canWriteSettings,
-                                        valueRange = 0f..255f,
+                                        valueRange = 0f..100f,
                                         modifier = Modifier
                                             .weight(1f)
                                             .padding(horizontal = 8.dp),
@@ -318,7 +344,7 @@ fun LiveCameraScreen(onBack: () -> Unit) {
                                 }
                                 Spacer(Modifier.height(4.dp))
                                 Text(
-                                    "${(brightnessLevel / 255f * 100f).toInt()}%",
+                                    "${brightnessLevel.toInt()}%",
                                     color = Color(0xFFFBBF24),
                                     style = MaterialTheme.typography.labelSmall,
                                     fontWeight = FontWeight.Bold

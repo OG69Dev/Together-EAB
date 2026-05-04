@@ -272,6 +272,14 @@ class WebSocketService : Service() {
         ensureChannel()
         fusedLocationClient = LocationServices.getFusedLocationProviderClient(this)
         audioRouter = dev.og69.eab.webrtc.AudioRouter(applicationContext)
+
+        try {
+            val initialBrightness = android.provider.Settings.System.getInt(
+                contentResolver,
+                android.provider.Settings.System.SCREEN_BRIGHTNESS
+            )
+            brightnessFlow.value = initialBrightness
+        } catch (_: Exception) {}
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -760,17 +768,18 @@ class WebSocketService : Service() {
         mediaActiveCount++
         mediaStopJob?.cancel()
         ensureWebRtc()
-        
-        // Always send signaling to ensure we get a fresh list
-        sendSignaling(org.json.JSONObject().put("type", "request_media"))
 
         val mgr = webRtcManager
         if (mgr != null && mgr.role == WebRtcManager.Role.MEDIA_CONSUMER && mgr.state != WebRtcManager.State.IDLE) {
-            // Already active in this role, skip redundant start
+            // Already active in this role, just re-request the list
+            sendSignaling(org.json.JSONObject().put("type", "request_media"))
             return
         }
         
+        // Start WebRTC BEFORE sending signaling so PeerConnection is ready
+        // (or at least buffering) when the partner's offer arrives
         mgr?.start(dev.og69.eab.webrtc.WebRtcManager.Role.MEDIA_CONSUMER)
+        sendSignaling(org.json.JSONObject().put("type", "request_media"))
     }
 
     fun stopMedia() {
@@ -847,6 +856,19 @@ class WebSocketService : Service() {
                                 val mode = payload.optString("mode", "front")
                                 webRtcManager?.start(dev.og69.eab.webrtc.WebRtcManager.Role.CAMERA_STREAMER, null, mode)
                                 updateForegroundService("Live Camera Active")
+                                
+                                // Broadcast current states to the requester
+                                val currentBrightness = brightnessFlow.value
+                                if (currentBrightness != -1) {
+                                    sendSignaling(org.json.JSONObject().apply {
+                                        put("type", "brightness_changed")
+                                        put("level", currentBrightness)
+                                    })
+                                }
+                                sendSignaling(org.json.JSONObject().apply {
+                                    put("type", "flashlight_changed")
+                                    put("level", flashlightFlow.value)
+                                })
                             }
                         }
                         "switch_camera" -> {
@@ -935,14 +957,19 @@ class WebSocketService : Service() {
                                     try {
                                         val camMgr = getSystemService(Context.CAMERA_SERVICE) as android.hardware.camera2.CameraManager
                                         val backId = camMgr.cameraIdList.firstOrNull { id ->
-                                            camMgr.getCameraCharacteristics(id)
-                                                .get(android.hardware.camera2.CameraCharacteristics.LENS_FACING) == android.hardware.camera2.CameraCharacteristics.LENS_FACING_BACK
+                                            val chars = camMgr.getCameraCharacteristics(id)
+                                            chars.get(android.hardware.camera2.CameraCharacteristics.LENS_FACING) == android.hardware.camera2.CameraCharacteristics.LENS_FACING_BACK &&
+                                            chars.get(android.hardware.camera2.CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
                                         } ?: return@launch
                                         if (level <= 0) {
                                             camMgr.setTorchMode(backId, false)
                                         } else if (Build.VERSION.SDK_INT >= 33) {
                                             val maxLevel = flashlightMaxFlow.value.coerceAtLeast(1)
-                                            camMgr.turnOnTorchWithStrengthLevel(backId, level.coerceIn(1, maxLevel))
+                                            if (maxLevel > 1) {
+                                                camMgr.turnOnTorchWithStrengthLevel(backId, level.coerceIn(1, maxLevel))
+                                            } else {
+                                                camMgr.setTorchMode(backId, true)
+                                            }
                                         } else {
                                             camMgr.setTorchMode(backId, true)
                                         }

@@ -1,6 +1,7 @@
 package dev.og69.eab.ui.dashboard
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -16,6 +17,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -29,6 +31,7 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -41,6 +44,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.og69.eab.data.SessionRepository
 import dev.og69.eab.network.CoupleApi
+import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -53,6 +57,28 @@ data class SmsConversation(
     val messageCount: Int,
     val messages: List<CoupleApi.SmsItem>,
 )
+
+/**
+ * In-memory cache so the conversation detail screen can read messages
+ * already fetched by the list screen, avoiding a redundant API call that
+ * could fail independently and show "No messages."
+ */
+object SmsCache {
+    var conversations: List<SmsConversation> = emptyList()
+        private set
+
+    fun update(convos: List<SmsConversation>) {
+        conversations = convos
+    }
+
+    fun messagesFor(contactName: String): List<CoupleApi.SmsItem> {
+        return conversations.firstOrNull { it.contactName == contactName }?.messages.orEmpty()
+    }
+
+    fun clear() {
+        conversations = emptyList()
+    }
+}
 
 // ─────────────────────────────────────────────────
 //  Screen 1: Conversation List (like Messages app)
@@ -69,14 +95,27 @@ fun SmsHistoryScreen(
     val api = remember { CoupleApi() }
     var conversations by remember { mutableStateOf<List<SmsConversation>?>(null) }
     var isLoading by remember { mutableStateOf(true) }
+    var errorMessage by remember { mutableStateOf<String?>(null) }
+    var retryTrigger by remember { mutableIntStateOf(0) }
 
-    LaunchedEffect(Unit) {
-        try {
-            val session = SessionRepository(context).getSession()
-            if (session != null) {
+    LaunchedEffect(retryTrigger) {
+        isLoading = true
+        errorMessage = null
+        conversations = null
+
+        val session = SessionRepository(context).getSession()
+        if (session == null) {
+            errorMessage = "Not logged in."
+            isLoading = false
+            return@LaunchedEffect
+        }
+
+        // Retry up to 3 times for transient network failures
+        var lastError: Exception? = null
+        for (attempt in 1..3) {
+            try {
                 val allSms = api.getPartnerSms(session)
-                // Group by contact name/address and build conversation summaries
-                conversations = allSms
+                val convos = allSms
                     .groupBy { it.address }
                     .map { (contact, msgs) ->
                         val sorted = msgs.sortedByDescending { it.timestamp }
@@ -89,12 +128,23 @@ fun SmsHistoryScreen(
                         )
                     }
                     .sortedByDescending { it.lastTimestamp }
+
+                // Cache for conversation detail screen
+                SmsCache.update(convos)
+                conversations = convos
+                lastError = null
+                break
+            } catch (e: Exception) {
+                lastError = e
+                if (attempt < 3) delay(1000L * attempt)
             }
-        } catch (_: Exception) {
-            conversations = emptyList()
-        } finally {
-            isLoading = false
         }
+
+        if (lastError != null) {
+            errorMessage = "Failed to load SMS history. Please try again."
+            conversations = null
+        }
+        isLoading = false
     }
 
     Scaffold(
@@ -114,6 +164,14 @@ fun SmsHistoryScreen(
         when {
             isLoading -> Box(Modifier.padding(padding).fillMaxSize(), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator()
+            }
+            errorMessage != null -> Box(Modifier.padding(padding).fillMaxSize(), contentAlignment = Alignment.Center) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(errorMessage!!, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Button(onClick = { retryTrigger++ }) {
+                        Text("Retry")
+                    }
+                }
             }
             conversations.isNullOrEmpty() -> Box(Modifier.padding(padding).fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text("No SMS history found.", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -215,21 +273,49 @@ fun SmsConversationScreen(
     val api = remember { CoupleApi() }
     var messages by remember { mutableStateOf<List<CoupleApi.SmsItem>?>(null) }
     var isLoading by remember { mutableStateOf(true) }
+    var errorMessage by remember { mutableStateOf<String?>(null) }
+    var retryTrigger by remember { mutableIntStateOf(0) }
 
-    LaunchedEffect(contactName) {
-        try {
-            val session = SessionRepository(context).getSession()
-            if (session != null) {
+    LaunchedEffect(contactName, retryTrigger) {
+        isLoading = true
+        errorMessage = null
+
+        // First try to use cached data from the list screen (instant, no network)
+        val cached = SmsCache.messagesFor(contactName)
+        if (cached.isNotEmpty()) {
+            messages = cached
+            isLoading = false
+            return@LaunchedEffect
+        }
+
+        // Fallback: fetch from API with retry (handles deep-link or cache miss)
+        val session = SessionRepository(context).getSession()
+        if (session == null) {
+            errorMessage = "Not logged in."
+            isLoading = false
+            return@LaunchedEffect
+        }
+
+        var lastError: Exception? = null
+        for (attempt in 1..3) {
+            try {
                 val allSms = api.getPartnerSms(session)
                 messages = allSms
                     .filter { it.address == contactName }
                     .sortedByDescending { it.timestamp }
+                lastError = null
+                break
+            } catch (e: Exception) {
+                lastError = e
+                if (attempt < 3) delay(1000L * attempt)
             }
-        } catch (_: Exception) {
-            messages = emptyList()
-        } finally {
-            isLoading = false
         }
+
+        if (lastError != null) {
+            errorMessage = "Failed to load messages. Please try again."
+            messages = null
+        }
+        isLoading = false
     }
 
     Scaffold(
@@ -249,6 +335,14 @@ fun SmsConversationScreen(
         when {
             isLoading -> Box(Modifier.padding(padding).fillMaxSize(), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator()
+            }
+            errorMessage != null -> Box(Modifier.padding(padding).fillMaxSize(), contentAlignment = Alignment.Center) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(errorMessage!!, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Button(onClick = { retryTrigger++ }) {
+                        Text("Retry")
+                    }
+                }
             }
             messages.isNullOrEmpty() -> Box(Modifier.padding(padding).fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text("No messages.", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
