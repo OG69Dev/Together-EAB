@@ -42,6 +42,7 @@ class SessionRepository(context: Context) {
         val profileShareScreenView = booleanPreferencesKey("profile_share_screen_view")
         val profileShareMedia = booleanPreferencesKey("profile_share_media")
         val profileShareAppControl = booleanPreferencesKey("profile_share_app_control")
+        val profileShareWallpaper = booleanPreferencesKey("profile_share_wallpaper")
         val cachedPartnerJson = stringPreferencesKey("cached_partner_json")
 
         val latestContactsHash = stringPreferencesKey("latest_contacts_hash")
@@ -94,6 +95,7 @@ class SessionRepository(context: Context) {
             shareScreenView = prefs[Keys.profileShareScreenView] == true,
             shareMedia = prefs[Keys.profileShareMedia] == true,
             shareAppControl = prefs[Keys.profileShareAppControl] != false, // Default true
+            shareWallpaper = prefs[Keys.profileShareWallpaper] != false, // Default true
         )
 
     }
@@ -135,6 +137,7 @@ class SessionRepository(context: Context) {
         shareScreenView: Boolean,
         shareMedia: Boolean,
         shareAppControl: Boolean,
+        shareWallpaper: Boolean,
         markCompleted: Boolean,
 
     ) {
@@ -156,6 +159,7 @@ class SessionRepository(context: Context) {
             prefs[Keys.profileShareScreenView] = shareScreenView
             prefs[Keys.profileShareMedia] = shareMedia
             prefs[Keys.profileShareAppControl] = shareAppControl
+            prefs[Keys.profileShareWallpaper] = shareWallpaper
             if (markCompleted) {
 
                 prefs[Keys.profileCompleted] = true
@@ -270,6 +274,7 @@ class SessionRepository(context: Context) {
         val shareScreenView: Boolean,
         val shareMedia: Boolean,
         val shareAppControl: Boolean,
+        val shareWallpaper: Boolean,
     )
 
 }

@@ -181,6 +181,7 @@ object DeviceMetrics {
         evaluate(activeCaps)?.let { return it }
 
         // 2. If active is a VPN or null, look at all networks
+        @Suppress("DEPRECATION")
         val allNetworks = cm.allNetworks
         for (n in allNetworks) {
             val c = cm.getNetworkCapabilities(n)

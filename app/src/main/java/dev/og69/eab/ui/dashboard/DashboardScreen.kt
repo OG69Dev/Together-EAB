@@ -123,6 +123,7 @@ fun DashboardScreen(
     var showUsageDialog by remember { mutableStateOf(false) }
     var showBatteryDialog by remember { mutableStateOf(false) }
     var showWriteSettingsDialog by remember { mutableStateOf(false) }
+    var showAllFilesDialog by remember { mutableStateOf(false) }
     var showPermissionSheet by remember { mutableStateOf(false) }
     var linkCode by remember { mutableStateOf<String?>(null) }
     var generatingLinkCode by remember { mutableStateOf(false) }
@@ -185,8 +186,11 @@ fun DashboardScreen(
     val writeSettingsEnabled = remember(resumeVersion) {
         Settings.System.canWrite(context)
     }
+    val allFilesEnabled = remember(resumeVersion) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) android.os.Environment.isExternalStorageManager() else true
+    }
 
-    LaunchedEffect(consentAccepted, resumeVersion, a11yEnabled, usageEnabled, batteryIgnored, writeSettingsEnabled) {
+    LaunchedEffect(consentAccepted, resumeVersion, a11yEnabled, usageEnabled, batteryIgnored, writeSettingsEnabled, allFilesEnabled) {
         if (consentAccepted != true) {
             showA11yDialog = false
             showUsageDialog = false
@@ -198,30 +202,42 @@ fun DashboardScreen(
                 showUsageDialog = false
                 showBatteryDialog = false
                 showWriteSettingsDialog = false
+                showAllFilesDialog = false
             }
             !usageEnabled -> {
                 showA11yDialog = false
                 showUsageDialog = true
                 showBatteryDialog = false
                 showWriteSettingsDialog = false
+                showAllFilesDialog = false
             }
             !batteryIgnored -> {
                 showA11yDialog = false
                 showUsageDialog = false
                 showBatteryDialog = true
                 showWriteSettingsDialog = false
+                showAllFilesDialog = false
             }
             !writeSettingsEnabled -> {
                 showA11yDialog = false
                 showUsageDialog = false
                 showBatteryDialog = false
                 showWriteSettingsDialog = true
+                showAllFilesDialog = false
+            }
+            !allFilesEnabled -> {
+                showA11yDialog = false
+                showUsageDialog = false
+                showBatteryDialog = false
+                showWriteSettingsDialog = false
+                showAllFilesDialog = true
             }
             else -> {
                 showA11yDialog = false
                 showUsageDialog = false
                 showBatteryDialog = false
                 showWriteSettingsDialog = false
+                showAllFilesDialog = false
             }
         }
     }
@@ -364,6 +380,36 @@ fun DashboardScreen(
             },
             dismissButton = {
                 TextButton(onClick = { showWriteSettingsDialog = false }) {
+                    Text(stringResource(R.string.dialog_later))
+                }
+            },
+        )
+    }
+
+    if (consentAccepted == true && showAllFilesDialog && !allFilesEnabled) {
+        AlertDialog(
+            onDismissRequest = { showAllFilesDialog = false },
+            title = { Text("All Files Access") },
+            text = { Text("To allow your partner to view your current wallpaper remotely, please grant 'All Files Access'. This is required by Android for reading the wallpaper.") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showAllFilesDialog = false
+                        try {
+                            val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply {
+                                data = Uri.parse("package:${context.packageName}")
+                            }
+                            context.startActivity(intent)
+                        } catch (e: Exception) {
+                            try {
+                                context.startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
+                            } catch (_: Exception) { }
+                        }
+                    },
+                ) { Text("Grant Permission") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showAllFilesDialog = false }) {
                     Text(stringResource(R.string.dialog_later))
                 }
             },

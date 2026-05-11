@@ -43,6 +43,7 @@ fun MainHostScreen(
     onNavigateToLiveScreen: () -> Unit,
     onNavigateToMediaBrowser: () -> Unit,
     onNavigateToAppControl: () -> Unit,
+    onNavigateToWallpaper: () -> Unit,
     navController: androidx.navigation.NavController,
 
     modifier: Modifier = Modifier
@@ -97,6 +98,7 @@ fun MainHostScreen(
                     onNavigateToLiveScreen = onNavigateToLiveScreen,
                     onNavigateToMediaBrowser = onNavigateToMediaBrowser,
                     onNavigateToAppControl = onNavigateToAppControl,
+                    onNavigateToWallpaper = onNavigateToWallpaper,
                 )
             }
 

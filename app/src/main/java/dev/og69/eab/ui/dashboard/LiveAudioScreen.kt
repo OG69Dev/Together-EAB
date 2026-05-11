@@ -11,7 +11,7 @@ import androidx.compose.material.icons.rounded.Headset
 import androidx.compose.material.icons.rounded.Hearing
 import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.Stop
-import androidx.compose.material.icons.rounded.VolumeUp
+import androidx.compose.material.icons.automirrored.rounded.VolumeUp
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -27,19 +27,35 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.og69.eab.network.WebSocketService
 import dev.og69.eab.webrtc.WebRtcManager
+import kotlinx.coroutines.delay
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun LiveAudioScreen(onBack: () -> Unit) {
     val state by WebSocketService.audioStateFlow.collectAsState()
+    var retryCount by remember { mutableIntStateOf(0) }
+    
+    LaunchedEffect(state) {
+        if (state == WebRtcManager.State.CONNECTED) {
+            retryCount = 0
+        } else if (state == WebRtcManager.State.DISCONNECTED || state == WebRtcManager.State.ERROR) {
+            if (retryCount < 3) {
+                delay(3000)
+                if (state == WebRtcManager.State.DISCONNECTED || state == WebRtcManager.State.ERROR) {
+                    retryCount++
+                    WebSocketService.requestAudio()
+                }
+            }
+        }
+    }
     
     // Status text and color based on WebRTC state
     val statusText = when (state) {
         WebRtcManager.State.IDLE -> "Ready to Connect"
         WebRtcManager.State.CONNECTING -> "Establishing Peer Connection..."
         WebRtcManager.State.CONNECTED -> "Live Audio Stream Active"
-        WebRtcManager.State.DISCONNECTED -> "Partner Disconnected"
-        WebRtcManager.State.ERROR -> "Connection Error"
+        WebRtcManager.State.DISCONNECTED -> if (retryCount > 0) "Reconnecting..." else "Partner Disconnected"
+        WebRtcManager.State.ERROR -> if (retryCount > 0) "Reconnecting..." else "Connection Error"
     }
     
     val statusColor by animateColorAsState(
@@ -67,7 +83,7 @@ fun LiveAudioScreen(onBack: () -> Unit) {
                     if (state == WebRtcManager.State.CONNECTED) {
                         IconButton(onClick = { WebSocketService.setSpeakerphone(!isSpeakerOn) }) {
                             Icon(
-                                if (isSpeakerOn) Icons.Rounded.VolumeUp else Icons.Rounded.Hearing,
+                                if (isSpeakerOn) Icons.AutoMirrored.Rounded.VolumeUp else Icons.Rounded.Hearing,
                                 contentDescription = "Toggle Speakerphone",
                                 tint = MaterialTheme.colorScheme.primary
                             )
@@ -140,7 +156,10 @@ fun LiveAudioScreen(onBack: () -> Unit) {
 
             if (state == WebRtcManager.State.IDLE || state == WebRtcManager.State.DISCONNECTED || state == WebRtcManager.State.ERROR) {
                 Button(
-                    onClick = { WebSocketService.requestAudio() },
+                    onClick = { 
+                        retryCount = 0
+                        WebSocketService.requestAudio() 
+                    },
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(64.dp),

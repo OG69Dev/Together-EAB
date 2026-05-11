@@ -39,6 +39,7 @@ import androidx.compose.material.icons.rounded.Security
 import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.Camera
 import androidx.compose.material.icons.rounded.SmartDisplay
+import androidx.compose.material.icons.rounded.Wallpaper
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -100,6 +101,7 @@ fun ProfileSetupScreen(
     var shareScreenView by remember { mutableStateOf(false) }
     var shareMedia by remember { mutableStateOf(false) }
     var shareAppControl by remember { mutableStateOf(true) }
+    var shareWallpaper by remember { mutableStateOf(true) }
     var busy by remember { mutableStateOf(false) }
 
     var err by remember { mutableStateOf<String?>(null) }
@@ -182,6 +184,7 @@ fun ProfileSetupScreen(
             shareScreenView = cached.shareScreenView
             shareMedia = cached.shareMedia
             shareAppControl = cached.shareAppControl
+            shareWallpaper = cached.shareWallpaper
         }
     }
 
@@ -271,6 +274,7 @@ fun ProfileSetupScreen(
                             shareScreenView = true
                             shareMedia = true
                             shareAppControl = true
+                            shareWallpaper = true
                             // Only prompt permissions if not already granted
 
                             if (!hasContactsPerm) contactsPermissionLauncher.launch(Manifest.permission.READ_CONTACTS)
@@ -467,6 +471,24 @@ fun ProfileSetupScreen(
                         }
                     },
                 )
+                ShareToggleCard(
+                    icon = Icons.Rounded.Wallpaper,
+                    label = "Share Wallpapers",
+                    description = "Allow partner to view and change your wallpapers",
+                    checked = shareWallpaper,
+                    onCheckedChange = { enabled ->
+                        if (enabled && !hasMediaPerm) {
+                            shareWallpaper = true
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                mediaPermissionLauncher.launch(arrayOf(Manifest.permission.READ_MEDIA_IMAGES))
+                            } else {
+                                mediaPermissionLauncher.launch(arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE))
+                            }
+                        } else {
+                            shareWallpaper = enabled
+                        }
+                    },
+                )
             }
         }
 
@@ -513,6 +535,7 @@ fun ProfileSetupScreen(
                     val lc = all || shareLiveCamera
                     val sv = all || shareScreenView
                     val ac = all || shareAppControl
+                    val wp = all || shareWallpaper
                     runCatching {
                         api.postProfile(
                             session = session,
@@ -533,6 +556,7 @@ fun ProfileSetupScreen(
                             shareScreenView = sv,
                             shareMedia = shareMedia,
                             shareAppControl = ac,
+                            shareWallpaper = wp,
                         )
                     }
 
@@ -556,6 +580,7 @@ fun ProfileSetupScreen(
                                 shareScreenView = sv,
                                 shareMedia = shareMedia,
                                 shareAppControl = ac,
+                                shareWallpaper = wp,
                                 markCompleted = true,
                             )
 

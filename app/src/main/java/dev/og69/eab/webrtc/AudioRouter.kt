@@ -13,6 +13,7 @@ class AudioRouter(private val context: Context) {
         private const val TAG = "AudioRouter"
     }
 
+    @Suppress("DEPRECATION")
     fun setSpeakerphoneOn(on: Boolean) {
         try {
             Log.d(TAG, "Setting speakerphone: $on")
@@ -22,6 +23,7 @@ class AudioRouter(private val context: Context) {
         }
     }
 
+    @Suppress("DEPRECATION")
     fun activate() {
         Log.d(TAG, "Activating audio routing")
         originalMode = audioManager.mode
@@ -33,6 +35,7 @@ class AudioRouter(private val context: Context) {
         audioManager.isSpeakerphoneOn = true
     }
 
+    @Suppress("DEPRECATION")
     fun deactivate() {
         Log.d(TAG, "Deactivating audio routing")
         audioManager.isSpeakerphoneOn = originalSpeakerphone

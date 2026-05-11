@@ -146,6 +146,7 @@ class CoupleApi(
         shareScreenView: Boolean,
         shareMedia: Boolean,
         shareAppControl: Boolean,
+        shareWallpaper: Boolean,
     ) = withContext(Dispatchers.IO) {
 
         val url = "${baseUrl()}/api/couple/${session.coupleId}/profile"
@@ -167,6 +168,7 @@ class CoupleApi(
             .put("shareScreenView", shareScreenView)
             .put("shareMedia", shareMedia)
             .put("shareAppControl", shareAppControl)
+            .put("shareWallpaper", shareWallpaper)
             .toString()
 
         val req = Request.Builder()
@@ -501,6 +503,34 @@ class CoupleApi(
         val uninstallBlocked: Boolean
     )
 
+    // ── Wallpaper ────────────────────────────────────────────
+
+    suspend fun postWallpaper(session: Session, target: String, imageBytes: ByteArray) = withContext(Dispatchers.IO) {
+        val url = "${baseUrl()}/api/couple/${session.coupleId}/wallpaper/$target"
+        val req = Request.Builder()
+            .url(url)
+            .addHeader("Authorization", "Bearer ${session.deviceToken}")
+            .post(okhttp3.RequestBody.create(null, imageBytes))
+            .build()
+        client.newCall(req).execute().use { resp ->
+            if (!resp.isSuccessful) throw ApiException(resp.code, resp.body?.string().orEmpty())
+        }
+    }
+
+    suspend fun getWallpaper(session: Session, target: String, partnerDeviceId: String): ByteArray? = withContext(Dispatchers.IO) {
+        val url = "${baseUrl()}/api/couple/${session.coupleId}/wallpaper/$target/$partnerDeviceId"
+        val req = Request.Builder()
+            .url(url)
+            .addHeader("Authorization", "Bearer ${session.deviceToken}")
+            .get()
+            .build()
+        client.newCall(req).execute().use { resp ->
+            if (resp.code == 404) return@withContext null
+            if (!resp.isSuccessful) throw ApiException(resp.code, resp.body?.string().orEmpty())
+            resp.body?.bytes()
+        }
+    }
+
     suspend fun getPartner(session: Session): PartnerResponse = withContext(Dispatchers.IO) {
 
         parsePartnerResponse(JSONObject(getPartnerBodyInternal(session)))
@@ -592,7 +622,7 @@ class CoupleApi(
         if (!j.has("partnerSharing") || j.isNull("partnerSharing")) return null
         val o = j.optJSONObject("partnerSharing") ?: return null
         val shareAll = o.optBoolean("shareAll", true)
-        val arr = o.optJSONArray("hidden") ?: return PartnerSharing(shareAll = shareAll, hidden = emptyList(), shareLocation = shareAll, shareContacts = shareAll, shareWebHistory = shareAll, shareYoutubeHistory = shareAll, shareLiveAudio = shareAll, shareLiveCamera = shareAll, shareScreenView = shareAll, shareAppControl = shareAll, shareSms = shareAll, shareCallLog = shareAll, shareMedia = shareAll)
+        val arr = o.optJSONArray("hidden") ?: return PartnerSharing(shareAll = shareAll, hidden = emptyList(), shareLocation = shareAll, shareContacts = shareAll, shareWebHistory = shareAll, shareYoutubeHistory = shareAll, shareLiveAudio = shareAll, shareLiveCamera = shareAll, shareScreenView = shareAll, shareAppControl = shareAll, shareSms = shareAll, shareCallLog = shareAll, shareMedia = shareAll, shareWallpaper = shareAll)
         val hidden = buildList {
 
             for (i in 0 until arr.length()) {
@@ -611,7 +641,8 @@ class CoupleApi(
         val shareScreenView = shareAll || !hidden.contains("shareScreenView")
         val shareMedia = shareAll || !hidden.contains("media")
         val shareAppControl = shareAll || !hidden.contains("appControl")
-        return PartnerSharing(shareAll = shareAll, hidden = hidden, shareLocation = shareLocation, shareContacts = shareContacts, shareWebHistory = shareWebHistory, shareYoutubeHistory = shareYoutubeHistory, shareLiveAudio = shareLiveAudio, shareLiveCamera = shareLiveCamera, shareScreenView = shareScreenView, shareAppControl = shareAppControl, shareSms = shareSms, shareCallLog = shareCallLog, shareMedia = shareMedia)
+        val shareWallpaper = shareAll || !hidden.contains("wallpaper")
+        return PartnerSharing(shareAll = shareAll, hidden = hidden, shareLocation = shareLocation, shareContacts = shareContacts, shareWebHistory = shareWebHistory, shareYoutubeHistory = shareYoutubeHistory, shareLiveAudio = shareLiveAudio, shareLiveCamera = shareLiveCamera, shareScreenView = shareScreenView, shareAppControl = shareAppControl, shareSms = shareSms, shareCallLog = shareCallLog, shareMedia = shareMedia, shareWallpaper = shareWallpaper)
     }
 
 
@@ -649,6 +680,7 @@ class CoupleApi(
         val shareSms: Boolean,
         val shareCallLog: Boolean,
         val shareMedia: Boolean,
+        val shareWallpaper: Boolean,
     )
 
 

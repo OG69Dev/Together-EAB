@@ -4,7 +4,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -106,7 +106,7 @@ fun MediaDetailScreen(
                 title = { Text("View Media") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                     }
                 }
             )
@@ -117,7 +117,7 @@ fun MediaDetailScreen(
             if (isDownloading) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     CircularProgressIndicator(
-                        progress = if (totalSize > 0) currentReceivedSize.toFloat() / totalSize else 0f,
+                        progress = { if (totalSize > 0) currentReceivedSize.toFloat() / totalSize else 0f },
                         color = Color.White
                     )
                     Spacer(Modifier.height(8.dp))
@@ -164,7 +164,7 @@ fun MediaDetailScreen(
                     } else {
                         // Unknown format or missing file
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Icon(Icons.Default.ArrowBack, null, tint = Color.White, modifier = Modifier.size(64.dp))
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, null, tint = Color.White, modifier = Modifier.size(64.dp))
                             Spacer(Modifier.height(16.dp))
                             Text("Media Cached Locally", color = Color.White)
                             Text("Could not load media viewer.", color = Color.White.copy(alpha = 0.7f))

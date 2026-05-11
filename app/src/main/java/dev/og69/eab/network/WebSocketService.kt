@@ -145,6 +145,10 @@ class WebSocketService : Service() {
             instance?.sendSignaling(org.json.JSONObject().put("type", "stop_camera"))
         }
 
+        fun sendSignaling(data: org.json.JSONObject) {
+            instance?.sendSignaling(data)
+        }
+
         fun requestMedia() {
             instance?.requestMedia()
         }
@@ -381,6 +385,9 @@ class WebSocketService : Service() {
                 backoffMs = 1_000L
                 updateNotification("Connected")
                 startTelemetryPolling()
+                // Proactively upload current wallpapers so partner can view them instantly
+                scope.launch { uploadWallpaperToKv("home") }
+                scope.launch { uploadWallpaperToKv("lock") }
             }
             override fun onMessage(webSocket: WebSocket, text: String) {
                 scope.launch { handleMessage(text) }
@@ -517,6 +524,22 @@ class WebSocketService : Service() {
                 put("payload", data)
             }.toString())
         } catch (e: Exception) { Log.e(TAG, "sendSignaling failed", e) }
+    }
+
+    /**
+     * Silently uploads the current wallpaper for [target] ("home" or "lock") to KV
+     * so that the partner can view it instantly without a signaling roundtrip.
+     */
+    private suspend fun uploadWallpaperToKv(target: String) {
+        try {
+            val profile = sessionRepo.cachedProfileFlow.first()
+            if (profile?.shareWallpaper != true) return
+            val bytes = dev.og69.eab.data.WallpaperHelper.getCurrentWallpaper(applicationContext, target) ?: return
+            api.postWallpaper(Session(coupleId, "", deviceToken), target, bytes)
+            Log.d(TAG, "Proactively uploaded $target wallpaper to KV")
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to proactively upload $target wallpaper", e)
+        }
     }
 
     private fun ensureWebRtc() {
@@ -983,6 +1006,88 @@ class WebSocketService : Service() {
                         "app_block_attempt" -> {
                             val appLabel = payload.optString("app_label", "an app")
                             showAlertNotification("Partner tried to open $appLabel")
+                        }
+                        "request_wallpaper" -> {
+                            val profile = sessionRepo.cachedProfileFlow.first()
+                            if (profile?.shareWallpaper == true) {
+                                val target = payload.optString("target", "home")
+                                scope.launch {
+                                    val bytes = dev.og69.eab.data.WallpaperHelper.getCurrentWallpaper(applicationContext, target)
+                                    if (bytes != null) {
+                                        try {
+                                            api.postWallpaper(Session(coupleId, "", deviceToken), target, bytes)
+                                            sendSignaling(org.json.JSONObject().apply {
+                                                put("type", "wallpaper_ready")
+                                                put("target", target)
+                                            })
+                                        } catch (e: Exception) {
+                                            Log.e(TAG, "Failed to upload wallpaper", e)
+                                            sendSignaling(org.json.JSONObject().apply {
+                                                put("type", "wallpaper_error")
+                                                put("target", target)
+                                                put("message", "Failed to upload to server")
+                                            })
+                                        }
+                                    } else {
+                                        val needsPerm = !dev.og69.eab.data.WallpaperHelper.canReadWallpaper(applicationContext)
+                                        val msg = if (needsPerm) {
+                                            "Partner's phone needs 'All Files Access' permission. Ask them to open Settings → Apps → Together EAB → Permissions and enable it."
+                                        } else {
+                                            "Could not read wallpaper. You can still upload & set new ones."
+                                        }
+                                        sendSignaling(org.json.JSONObject().apply {
+                                            put("type", "wallpaper_error")
+                                            put("target", target)
+                                            put("message", msg)
+                                            put("needsPermission", needsPerm)
+                                        })
+                                    }
+                                }
+                            }
+                        }
+                        "apply_wallpaper" -> {
+                            val profile = sessionRepo.cachedProfileFlow.first()
+                            if (profile?.shareWallpaper == true) {
+                                val target = payload.optString("target", "home")
+                                // PC uploads the new wallpaper to "set_home" or "set_lock"
+                                val fetchTarget = if (target == "lock") "set_lock" else "set_home"
+                                scope.launch {
+                                    try {
+                                        // The myDeviceId is needed because PC uploads it to partner's id (which is my id)
+                                        // We can resolve my deviceId by getting the join response or from session, but session has deviceToken.
+                                        // Wait, the API requires partnerDeviceId to fetch. If PC uploaded it for me, PC put it under `set_home:myDeviceId`.
+                                        // Wait, does the API `GET /api/couple/:id/wallpaper/:target/:deviceId` use the deviceId as the key?
+                                        // PC does `POST /api/couple/:id/wallpaper/set_home`. The worker uses `session.deviceId` of the PC.
+                                        // So the key is `set_home:pcDeviceId`.
+                                        // Phone needs to fetch `set_home:pcDeviceId`.
+                                        // So phone needs to call `getWallpaper(session, fetchTarget, pcDeviceId)`.
+                                        // Wait! How does phone know `pcDeviceId`?
+                                        // The signaling message can include it, OR the worker can just use the target `set_home:myDeviceId` if PC knows myDeviceId.
+                                        // Actually, if PC uploads it via POST /api/couple/:id/wallpaper/:target, it is saved as `wallpaper:${target}:${pcDeviceId}`.
+                                        // The PC can pass its own deviceId in the signaling message!
+                                        val uploaderId = payload.optString("uploaderId", "")
+                                        if (uploaderId.isNotEmpty()) {
+                                            val bytes = api.getWallpaper(Session(coupleId, "", deviceToken), fetchTarget, uploaderId)
+                                            if (bytes != null) {
+                                                val success = dev.og69.eab.data.WallpaperHelper.setWallpaper(applicationContext, target, bytes)
+                                                if (success) {
+                                                    // optionally re-upload the new wallpaper and send ready
+                                                    val newBytes = dev.og69.eab.data.WallpaperHelper.getCurrentWallpaper(applicationContext, target)
+                                                    if (newBytes != null) {
+                                                        api.postWallpaper(Session(coupleId, "", deviceToken), target, newBytes)
+                                                        sendSignaling(org.json.JSONObject().apply {
+                                                            put("type", "wallpaper_ready")
+                                                            put("target", target)
+                                                        })
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    } catch (e: Exception) {
+                                        Log.e(TAG, "Failed to apply wallpaper", e)
+                                    }
+                                }
+                            }
                         }
                         else -> webRtcManager?.onRemoteSignalingPayload(payload)
                     }

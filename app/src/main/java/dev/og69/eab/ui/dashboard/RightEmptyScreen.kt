@@ -23,6 +23,7 @@ import androidx.compose.material.icons.rounded.PhotoLibrary
 import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.Camera
 import androidx.compose.material.icons.rounded.ScreenshotMonitor
+import androidx.compose.material.icons.rounded.Wallpaper
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -56,6 +57,7 @@ fun RightEmptyScreen(
     onNavigateToLiveScreen: () -> Unit,
     onNavigateToMediaBrowser: () -> Unit,
     onNavigateToAppControl: () -> Unit,
+    onNavigateToWallpaper: () -> Unit,
     modifier: Modifier = Modifier
 ) {
 
@@ -106,6 +108,8 @@ fun RightEmptyScreen(
             MoreMenuItem(icon = Icons.Rounded.PhotoLibrary, label = "View Photos", isEnabled = partnerSharing?.shareMedia != false, onClick = onNavigateToMediaBrowser)
             Spacer(Modifier.height(12.dp))
             MoreMenuItem(icon = Icons.Default.Security, label = "App Control", isEnabled = partnerSharing?.shareAppControl != false, onClick = onNavigateToAppControl)
+            Spacer(Modifier.height(12.dp))
+            MoreMenuItem(icon = Icons.Rounded.Wallpaper, label = "Wallpapers", isEnabled = partnerSharing?.shareWallpaper != false, onClick = onNavigateToWallpaper)
         }
     }
 }

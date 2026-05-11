@@ -9,6 +9,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.*
+import androidx.compose.material.icons.automirrored.rounded.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -33,6 +34,22 @@ import kotlinx.coroutines.delay
 fun LiveCameraScreen(onBack: () -> Unit) {
     val state by WebSocketService.cameraStateFlow.collectAsState()
     val remoteTracks by WebSocketService.remoteVideoTracksFlow.collectAsState()
+    
+    var retryCount by remember { mutableIntStateOf(0) }
+    
+    LaunchedEffect(state) {
+        if (state == WebRtcManager.State.CONNECTED) {
+            retryCount = 0
+        } else if (state == WebRtcManager.State.DISCONNECTED || state == WebRtcManager.State.ERROR) {
+            if (retryCount < 3) {
+                delay(3000)
+                if (state == WebRtcManager.State.DISCONNECTED || state == WebRtcManager.State.ERROR) {
+                    retryCount++
+                    WebSocketService.requestCamera()
+                }
+            }
+        }
+    }
     
     val context = LocalContext.current
     val eglBase = remember { EglBase.create() }
@@ -135,7 +152,7 @@ fun LiveCameraScreen(onBack: () -> Unit) {
                 },
                 navigationIcon = {
                     IconButton(onClick = handleBack) {
-                        Icon(Icons.Rounded.ArrowBack, contentDescription = "Back", tint = Color.White)
+                        Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back", tint = Color.White)
                     }
                 },
                 actions = {
@@ -143,7 +160,7 @@ fun LiveCameraScreen(onBack: () -> Unit) {
                     if (state == WebRtcManager.State.CONNECTED || remoteTracks.isNotEmpty()) {
                         IconButton(onClick = { WebSocketService.setSpeakerphone(!isSpeakerOn) }) {
                             Icon(
-                                if (isSpeakerOn) Icons.Rounded.VolumeUp else Icons.Rounded.Hearing,
+                                if (isSpeakerOn) Icons.AutoMirrored.Rounded.VolumeUp else Icons.Rounded.Hearing,
                                 null,
                                 tint = Color.White
                             )
@@ -511,7 +528,10 @@ fun LiveCameraScreen(onBack: () -> Unit) {
                     }
                 }
             } else {
-                LoadingState(state) { WebSocketService.requestCamera(cameraMode) }
+                LoadingState(state, retryCount > 0) { 
+                    retryCount = 0
+                    WebSocketService.requestCamera(cameraMode) 
+                }
             }
 
             // Switching Overlay

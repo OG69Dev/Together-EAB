@@ -63,6 +63,7 @@ class AppBlockActivity : ComponentActivity() {
         }
     }
 
+    @Suppress("DEPRECATION")
     override fun onBackPressed() {
         // Prevent back button
     }

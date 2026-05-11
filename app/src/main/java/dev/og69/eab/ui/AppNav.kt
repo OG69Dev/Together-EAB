@@ -27,6 +27,7 @@ import dev.og69.eab.ui.dashboard.LiveScreenViewScreen
 import dev.og69.eab.ui.dashboard.MediaBrowserScreen
 import dev.og69.eab.ui.dashboard.MediaDetailScreen
 import dev.og69.eab.ui.dashboard.AppControlScreen
+import dev.og69.eab.ui.dashboard.WallpaperControlScreen
 import java.net.URLDecoder
 import java.net.URLEncoder
 
@@ -132,6 +133,9 @@ fun AppNav(modifier: Modifier = Modifier) {
                 onNavigateToAppControl = {
                     nav.navigate("app_control")
                 },
+                onNavigateToWallpaper = {
+                    nav.navigate("wallpaper_control")
+                },
                 navController = nav,
             )
         }
@@ -192,6 +196,9 @@ fun AppNav(modifier: Modifier = Modifier) {
         }
         composable("app_control") {
             AppControlScreen(onBack = { nav.popBackStack() })
+        }
+        composable("wallpaper_control") {
+            WallpaperControlScreen(onBack = { nav.popBackStack() })
         }
     }
 }

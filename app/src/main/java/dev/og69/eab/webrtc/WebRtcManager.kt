@@ -80,6 +80,8 @@ class WebRtcManager(
 
     private var isNegotiating = false
     private var pendingNegotiation = false
+    private var connectionTimeoutJob: Job? = null
+    private var iceRestartJob: Job? = null
 
     // Buffer for signaling messages that arrive before PeerConnection is ready
     private val pendingSignaling = mutableListOf<JSONObject>()
@@ -118,6 +120,16 @@ class WebRtcManager(
         this.role = role
         state = State.CONNECTING
         onStateChange(State.CONNECTING)
+
+        connectionTimeoutJob?.cancel()
+        connectionTimeoutJob = scope.launch {
+            delay(15000)
+            if (state == State.CONNECTING) {
+                Log.w(TAG, "Connection timeout reached")
+                state = State.ERROR
+                onStateChange(State.ERROR)
+            }
+        }
 
         scope.launch {
             Log.d(TAG, "Starting WebRtcManager as $role (gathering ICE...)")
@@ -173,14 +185,28 @@ class WebRtcManager(
                     Log.d(TAG, "onIceConnectionChange: $iceState")
                     when (iceState) {
                         PeerConnection.IceConnectionState.CONNECTED -> {
+                            connectionTimeoutJob?.cancel()
+                            iceRestartJob?.cancel()
                             state = State.CONNECTED
                             onStateChange(State.CONNECTED)
                         }
                         PeerConnection.IceConnectionState.DISCONNECTED -> {
                             state = State.DISCONNECTED
                             onStateChange(State.DISCONNECTED)
+                            iceRestartJob?.cancel()
+                            iceRestartJob = scope.launch {
+                                delay(5000)
+                                if (state == State.DISCONNECTED) {
+                                    Log.d(TAG, "Initiating ICE restart")
+                                    state = State.CONNECTING
+                                    onStateChange(State.CONNECTING)
+                                    createOffer(iceRestart = true)
+                                }
+                            }
                         }
                         PeerConnection.IceConnectionState.FAILED -> {
+                            connectionTimeoutJob?.cancel()
+                            iceRestartJob?.cancel()
                             state = State.ERROR
                             onStateChange(State.ERROR)
                         }
@@ -285,15 +311,18 @@ class WebRtcManager(
         peerConnection?.addTransceiver(MediaStreamTrack.MediaType.MEDIA_TYPE_AUDIO, RtpTransceiver.RtpTransceiverInit(RtpTransceiver.RtpTransceiverDirection.RECV_ONLY))
     }
 
-    private fun createOffer() {
+    private fun createOffer(iceRestart: Boolean = false) {
         if (isNegotiating) {
             Log.d(TAG, "Already negotiating, marking pending")
             pendingNegotiation = true
             return
         }
         isNegotiating = true
-        Log.d(TAG, "Creating offer")
+        Log.d(TAG, "Creating offer (iceRestart=$iceRestart)")
         val constraints = MediaConstraints()
+        if (iceRestart) {
+            constraints.mandatory.add(MediaConstraints.KeyValuePair("IceRestart", "true"))
+        }
         peerConnection?.createOffer(object : SdpObserver {
             override fun onCreateSuccess(sdp: SessionDescription) {
                 Log.d(TAG, "Offer onCreateSuccess")
@@ -827,6 +856,9 @@ class WebRtcManager(
         // 4. Close peer connection
         peerConnection?.dispose()
         peerConnection = null
+        
+        connectionTimeoutJob?.cancel()
+        iceRestartJob?.cancel()
 
         // 5. Now safe to dispose sources and tracks
         localAudioTrack?.dispose()

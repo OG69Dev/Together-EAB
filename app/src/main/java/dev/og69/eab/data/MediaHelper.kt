@@ -107,6 +107,7 @@ class MediaHelper(private val context: Context) {
     /**
      * Retrieves a thumbnail for a specific media item.
      */
+    @Suppress("DEPRECATION")
     fun getThumbnail(item: MediaItem, width: Int = 120, height: Int = 120): ByteArray? {
         return try {
             val bitmap = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {

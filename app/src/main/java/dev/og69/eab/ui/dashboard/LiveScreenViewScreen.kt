@@ -8,6 +8,7 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.*
+import androidx.compose.material.icons.automirrored.rounded.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -28,6 +29,7 @@ import dev.og69.eab.network.WebSocketService
 import dev.og69.eab.webrtc.WebRtcManager
 import org.json.JSONObject
 import org.webrtc.EglBase
+import kotlinx.coroutines.delay
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalComposeUiApi::class)
 @Composable
@@ -35,6 +37,22 @@ fun LiveScreenViewScreen(onBack: () -> Unit) {
     val state by WebSocketService.screenStateFlow.collectAsState()
     val remoteTracks by WebSocketService.remoteVideoTracksFlow.collectAsState()
     val remoteTrack = remoteTracks.values.firstOrNull()
+    
+    var retryCount by remember { mutableIntStateOf(0) }
+    
+    LaunchedEffect(state) {
+        if (state == WebRtcManager.State.CONNECTED) {
+            retryCount = 0
+        } else if (state == WebRtcManager.State.DISCONNECTED || state == WebRtcManager.State.ERROR) {
+            if (retryCount < 3) {
+                delay(3000)
+                if (state == WebRtcManager.State.DISCONNECTED || state == WebRtcManager.State.ERROR) {
+                    retryCount++
+                    WebSocketService.requestScreen()
+                }
+            }
+        }
+    }
     
     val context = LocalContext.current
     val eglBase = remember { EglBase.create() }
@@ -76,7 +94,7 @@ fun LiveScreenViewScreen(onBack: () -> Unit) {
                     },
                     navigationIcon = {
                         IconButton(onClick = handleBack) {
-                            Icon(Icons.Rounded.ArrowBack, contentDescription = "Back", tint = Color.White)
+                            Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back", tint = Color.White)
                         }
                     },
                     actions = {
@@ -84,14 +102,14 @@ fun LiveScreenViewScreen(onBack: () -> Unit) {
                         if (state == WebRtcManager.State.CONNECTED || remoteTrack != null) {
                             IconButton(onClick = { WebSocketService.setSpeakerphone(!isSpeakerOn) }) {
                                 Icon(
-                                    if (isSpeakerOn) Icons.Rounded.VolumeUp else Icons.Rounded.Hearing,
+                                    if (isSpeakerOn) Icons.AutoMirrored.Rounded.VolumeUp else Icons.Rounded.Hearing,
                                     null,
                                     tint = Color.White
                                 )
                             }
                         }
                         IconButton(onClick = { isMuted = !isMuted }) {
-                            Icon(if (isMuted) Icons.Rounded.VolumeOff else Icons.Rounded.VolumeUp, null, tint = Color.White)
+                            Icon(if (isMuted) Icons.AutoMirrored.Rounded.VolumeOff else Icons.AutoMirrored.Rounded.VolumeUp, null, tint = Color.White)
                         }
                         if (state == WebRtcManager.State.CONNECTED || remoteTrack != null) {
                             IconButton(onClick = { 
@@ -257,7 +275,10 @@ fun LiveScreenViewScreen(onBack: () -> Unit) {
                     }
                 }
             } else {
-                LoadingState(state) { WebSocketService.requestScreen() }
+                LoadingState(state, retryCount > 0) { 
+                    retryCount = 0
+                    WebSocketService.requestScreen() 
+                }
             }
         }
 
@@ -352,7 +373,7 @@ fun EmojiButton(emoji: String, isSelected: Boolean, onClick: () -> Unit) {
 }
 
 @Composable
-fun LoadingState(state: WebRtcManager.State, onRetry: () -> Unit) {
+fun LoadingState(state: WebRtcManager.State, isReconnecting: Boolean = false, onRetry: () -> Unit) {
     Column(
         modifier = Modifier.fillMaxSize(),
         verticalArrangement = Arrangement.Center,
@@ -364,11 +385,17 @@ fun LoadingState(state: WebRtcManager.State, onRetry: () -> Unit) {
                 Spacer(Modifier.height(16.dp))
                 Text("Connecting to partner...", color = Color.White)
             }
-            WebRtcManager.State.ERROR -> {
-                Icon(Icons.Rounded.ErrorOutline, null, tint = Color.Red, modifier = Modifier.size(64.dp))
-                Spacer(Modifier.height(16.dp))
-                Text("Connection Failed", color = Color.White)
-                Button(onClick = onRetry) { Text("Retry") }
+            WebRtcManager.State.ERROR, WebRtcManager.State.DISCONNECTED -> {
+                if (isReconnecting) {
+                    CircularProgressIndicator(color = Color.White)
+                    Spacer(Modifier.height(16.dp))
+                    Text("Reconnecting...", color = Color.White)
+                } else {
+                    Icon(Icons.Rounded.ErrorOutline, null, tint = Color.Red, modifier = Modifier.size(64.dp))
+                    Spacer(Modifier.height(16.dp))
+                    Text("Connection Failed", color = Color.White)
+                    Button(onClick = onRetry) { Text("Retry") }
+                }
             }
             else -> {
                 Button(onClick = onRetry) { Text("Start Viewing") }
