@@ -528,6 +528,8 @@ fun LiveCameraScreen(onBack: () -> Unit) {
                     }
                 }
             } else {
+                // Clear switchingMode immediately when we drop to the loading/disconnected state
+                LaunchedEffect(Unit) { switchingMode = false }
                 LoadingState(state, retryCount > 0) { 
                     retryCount = 0
                     WebSocketService.requestCamera(cameraMode) 
@@ -552,6 +554,14 @@ fun LiveCameraScreen(onBack: () -> Unit) {
             LaunchedEffect(remoteTracks) {
                 if (remoteTracks.isNotEmpty()) {
                     delay(800) // Small buffer to ensure first frames are ready
+                    switchingMode = false
+                }
+            }
+
+            // Safety timeout: never leave switchingMode stuck for more than 6 seconds
+            LaunchedEffect(switchingMode) {
+                if (switchingMode) {
+                    delay(6000)
                     switchingMode = false
                 }
             }

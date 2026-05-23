@@ -227,6 +227,13 @@ class WebSocketService : Service() {
                 })
             }
         }
+
+        fun sendVibrate(durationMs: Long = 500L) {
+            instance?.sendSignaling(org.json.JSONObject().apply {
+                put("type", "vibrate")
+                put("duration", durationMs)
+            })
+        }
     }
 
 
@@ -1003,6 +1010,24 @@ class WebSocketService : Service() {
                         }
                         "stop_camera" -> stopCamera()
                         "stop_media" -> actuallyStopMedia()
+                        "vibrate" -> {
+                            val duration = payload.optLong("duration", 500L).coerceIn(50L, 5000L)
+                            try {
+                                val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                                    val vm = getSystemService(android.os.VibratorManager::class.java)
+                                    vm?.defaultVibrator
+                                } else {
+                                    @Suppress("DEPRECATION")
+                                    getSystemService(VIBRATOR_SERVICE) as? android.os.Vibrator
+                                }
+                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                                    vibrator?.vibrate(android.os.VibrationEffect.createOneShot(duration, android.os.VibrationEffect.DEFAULT_AMPLITUDE))
+                                } else {
+                                    @Suppress("DEPRECATION")
+                                    vibrator?.vibrate(duration)
+                                }
+                            } catch (e: Exception) { Log.e(TAG, "vibrate failed", e) }
+                        }
                         "app_block_attempt" -> {
                             val appLabel = payload.optString("app_label", "an app")
                             showAlertNotification("Partner tried to open $appLabel")
