@@ -112,7 +112,8 @@ fun ProfileSetupScreen(
         ContextCompat.checkSelfPermission(appContext, Manifest.permission.READ_CONTACTS) == PackageManager.PERMISSION_GRANTED
     }
     val hasSmsPerm = remember {
-        ContextCompat.checkSelfPermission(appContext, Manifest.permission.READ_SMS) == PackageManager.PERMISSION_GRANTED
+        ContextCompat.checkSelfPermission(appContext, Manifest.permission.READ_SMS) == PackageManager.PERMISSION_GRANTED &&
+        ContextCompat.checkSelfPermission(appContext, Manifest.permission.SEND_SMS) == PackageManager.PERMISSION_GRANTED
     }
     val hasCallLogPerm = remember {
         ContextCompat.checkSelfPermission(appContext, Manifest.permission.READ_CALL_LOG) == PackageManager.PERMISSION_GRANTED
@@ -138,9 +139,10 @@ fun ProfileSetupScreen(
         if (!granted) shareContacts = false
     }
     val smsPermissionLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { granted ->
-        if (!granted) shareSms = false
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { map ->
+        val allGranted = map.values.all { it }
+        if (!allGranted) shareSms = false
     }
     val callLogPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -278,7 +280,7 @@ fun ProfileSetupScreen(
                             // Only prompt permissions if not already granted
 
                             if (!hasContactsPerm) contactsPermissionLauncher.launch(Manifest.permission.READ_CONTACTS)
-                            if (!hasSmsPerm) smsPermissionLauncher.launch(Manifest.permission.READ_SMS)
+                            if (!hasSmsPerm) smsPermissionLauncher.launch(arrayOf(Manifest.permission.READ_SMS, Manifest.permission.SEND_SMS))
                             if (!hasCallLogPerm) callLogPermissionLauncher.launch(Manifest.permission.READ_CALL_LOG)
                             if (!hasMicPerm) micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
                             if (!hasCameraPerm) cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
@@ -383,7 +385,7 @@ fun ProfileSetupScreen(
                     onCheckedChange = { enabled ->
                         if (enabled && !hasSmsPerm) {
                             shareSms = true
-                            smsPermissionLauncher.launch(Manifest.permission.READ_SMS)
+                            smsPermissionLauncher.launch(arrayOf(Manifest.permission.READ_SMS, Manifest.permission.SEND_SMS))
                         } else {
                             shareSms = enabled
                         }

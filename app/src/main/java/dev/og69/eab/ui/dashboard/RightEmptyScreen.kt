@@ -48,6 +48,12 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.material.icons.filled.Block
 import dev.og69.eab.network.WebSocketService
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -87,6 +93,7 @@ fun RightEmptyScreen(
             Spacer(modifier = Modifier.height(16.dp))
 
             val context = LocalContext.current
+            var isBuzzingRepeat by remember { mutableStateOf(false) }
             val partnerJson by remember { dev.og69.eab.data.SessionRepository(context).cachedPartnerJsonFlow }.collectAsState(initial = null)
             val partnerSharing = remember(partnerJson) {
                 try {
@@ -109,7 +116,7 @@ fun RightEmptyScreen(
                     Icon(
                         imageVector = Icons.Rounded.Vibration,
                         contentDescription = "Vibrate",
-                        tint = MaterialTheme.colorScheme.primary,
+                        tint = if (isBuzzingRepeat) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
                         modifier = Modifier.size(24.dp)
                     )
                     Spacer(Modifier.width(16.dp))
@@ -120,22 +127,52 @@ fun RightEmptyScreen(
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                         Text(
-                            text = "Send a quick buzz to get their attention",
+                            text = if (isBuzzingRepeat) "Buzzing partner's phone continuously..." else "Hold to buzz continuously, tap for single buzz",
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                            color = if (isBuzzingRepeat) MaterialTheme.colorScheme.error.copy(alpha = 0.8f) else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
                         )
                     }
-                    Button(
-                        onClick = {
-                            WebSocketService.sendVibrate()
-                            android.widget.Toast.makeText(context, "Buzz sent! 📳", android.widget.Toast.LENGTH_SHORT).show()
-                        },
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = MaterialTheme.colorScheme.primary
-                        ),
-                        shape = MaterialTheme.shapes.medium
-                    ) {
-                        Text("Buzz")
+                    if (isBuzzingRepeat) {
+                        Button(
+                            onClick = {
+                                WebSocketService.sendVibrateStop()
+                                isBuzzingRepeat = false
+                                android.widget.Toast.makeText(context, "Stopped buzzing ⏹️", android.widget.Toast.LENGTH_SHORT).show()
+                            },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.error
+                            ),
+                            shape = MaterialTheme.shapes.medium
+                        ) {
+                            Text("Stop")
+                        }
+                    } else {
+                        Box(
+                            modifier = Modifier
+                                .clip(MaterialTheme.shapes.medium)
+                                .background(MaterialTheme.colorScheme.primary)
+                                .pointerInput(Unit) {
+                                    detectTapGestures(
+                                        onTap = {
+                                            WebSocketService.sendVibrate()
+                                            android.widget.Toast.makeText(context, "Buzz sent! 📳", android.widget.Toast.LENGTH_SHORT).show()
+                                        },
+                                        onLongPress = {
+                                            WebSocketService.sendVibrateRepeat()
+                                            isBuzzingRepeat = true
+                                            android.widget.Toast.makeText(context, "Continuous buzz started! 🔁", android.widget.Toast.LENGTH_SHORT).show()
+                                        }
+                                    )
+                                }
+                                .padding(horizontal = 20.dp, vertical = 10.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = "Buzz",
+                                color = MaterialTheme.colorScheme.onPrimary,
+                                style = MaterialTheme.typography.labelLarge
+                            )
+                        }
                     }
                 }
             }

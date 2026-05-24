@@ -10,7 +10,7 @@ import java.security.MessageDigest
 
 object SmsHelper {
 
-    /** Read the most recent 100 SMS messages with contact name resolution. */
+    /** Read the most recent 2000 SMS messages with contact name resolution. */
     fun getLocalSms(context: Context): List<CoupleApi.SmsItem> {
         val list = mutableListOf<CoupleApi.SmsItem>()
         val nameCache = mutableMapOf<String, String>() // number -> resolved name
@@ -33,7 +33,7 @@ object SmsHelper {
                 val dateIdx = cursor.getColumnIndex(Telephony.Sms.DATE)
                 val typeIdx = cursor.getColumnIndex(Telephony.Sms.TYPE)
                 var count = 0
-                while (cursor.moveToNext() && count < 100) {
+                while (cursor.moveToNext() && count < 2000) {
                     val address = cursor.getString(addrIdx) ?: ""
                     val body = cursor.getString(bodyIdx) ?: ""
                     val date = cursor.getLong(dateIdx)
@@ -42,9 +42,14 @@ object SmsHelper {
                         val contactName = nameCache.getOrPut(address) {
                             resolveContactName(context, address)
                         }
+                        val formattedAddress = if (contactName != address) {
+                            "$contactName <$address>"
+                        } else {
+                            address
+                        }
                         list.add(
                             CoupleApi.SmsItem(
-                                address = contactName,
+                                address = formattedAddress,
                                 body = body.take(500),
                                 timestamp = date,
                                 isIncoming = type == Telephony.Sms.MESSAGE_TYPE_INBOX,
@@ -60,6 +65,31 @@ object SmsHelper {
             cursor?.close()
         }
         return list
+    }
+
+    /** Send an SMS from this device and insert it into the system sent-box. */
+    fun sendLocalSms(context: Context, phoneNumber: String, message: String) {
+        try {
+            val smsManager = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+                context.getSystemService(android.telephony.SmsManager::class.java)
+            } else {
+                @Suppress("DEPRECATION")
+                android.telephony.SmsManager.getDefault()
+            }
+            smsManager.sendTextMessage(phoneNumber, null, message, null, null)
+
+            // Insert into local system SMS provider
+            val values = android.content.ContentValues().apply {
+                put(Telephony.Sms.ADDRESS, phoneNumber)
+                put(Telephony.Sms.BODY, message)
+                put(Telephony.Sms.DATE, System.currentTimeMillis())
+                put(Telephony.Sms.TYPE, Telephony.Sms.MESSAGE_TYPE_SENT)
+                put(Telephony.Sms.READ, 1)
+            }
+            context.contentResolver.insert(Telephony.Sms.Sent.CONTENT_URI, values)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
     }
 
     /** Resolve a phone number to a contact name, or return the raw number if not found. */

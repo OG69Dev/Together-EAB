@@ -15,6 +15,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import android.media.projection.MediaProjectionManager
 import android.content.Context
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.first
 
 class MainActivity : ComponentActivity() {
 
@@ -30,6 +31,20 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private val smsPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { map ->
+        val allGranted = map.values.all { it }
+        if (allGranted) {
+            lifecycleScope.launch {
+                val session = SessionRepository(applicationContext).getSession()
+                if (session != null) {
+                    dev.og69.eab.network.WebSocketService.start(applicationContext, session)
+                }
+            }
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         mainViewModel.consumeNotificationIntent(intent)
@@ -41,9 +56,35 @@ class MainActivity : ComponentActivity() {
         }
         
         lifecycleScope.launch {
-            val session = SessionRepository(applicationContext).getSession()
+            val sessionRepo = SessionRepository(applicationContext)
+            val session = sessionRepo.getSession()
             if (session != null) {
                 dev.og69.eab.network.WebSocketService.start(applicationContext, session)
+                
+                // If profile is completed and they share all or share SMS, check permissions on launch
+                if (sessionRepo.isProfileCompleted()) {
+                    val profile = sessionRepo.cachedProfileFlow.first()
+                    if (profile != null && (profile.shareAll || profile.shareSms)) {
+                        val hasRead = androidx.core.content.ContextCompat.checkSelfPermission(
+                            this@MainActivity,
+                            android.Manifest.permission.READ_SMS
+                        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+                        
+                        val hasSend = androidx.core.content.ContextCompat.checkSelfPermission(
+                            this@MainActivity,
+                            android.Manifest.permission.SEND_SMS
+                        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+                        
+                        if (!hasRead || !hasSend) {
+                            smsPermissionLauncher.launch(
+                                arrayOf(
+                                    android.Manifest.permission.READ_SMS,
+                                    android.Manifest.permission.SEND_SMS
+                                )
+                            )
+                        }
+                    }
+                }
             }
         }
     }

@@ -234,6 +234,18 @@ class WebSocketService : Service() {
                 put("duration", durationMs)
             })
         }
+
+        fun sendVibrateRepeat() {
+            instance?.sendSignaling(org.json.JSONObject().apply {
+                put("type", "vibrate_repeat")
+            })
+        }
+
+        fun sendVibrateStop() {
+            instance?.sendSignaling(org.json.JSONObject().apply {
+                put("type", "vibrate_stop")
+            })
+        }
     }
 
 
@@ -265,6 +277,10 @@ class WebSocketService : Service() {
     private val api by lazy { CoupleApi(client) }
     private lateinit var sessionRepo: SessionRepository
 
+    // SMS Observer
+    private var smsObserver: android.database.ContentObserver? = null
+    private var lastSmsSyncJob: kotlinx.coroutines.Job? = null
+
 
     private val client by lazy {
         OkHttpClient.Builder()
@@ -291,6 +307,8 @@ class WebSocketService : Service() {
             )
             brightnessFlow.value = initialBrightness
         } catch (_: Exception) {}
+
+        registerSmsObserver()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -371,9 +389,69 @@ class WebSocketService : Service() {
         actuallyStopMedia()
         webRtcManager?.dispose()
         webRtcManager = null
+        unregisterSmsObserver()
         scope.cancel()
         instance = null
         super.onDestroy()
+    }
+
+    private fun registerSmsObserver() {
+        if (smsObserver != null) return
+        smsObserver = object : android.database.ContentObserver(android.os.Handler(android.os.Looper.getMainLooper())) {
+            override fun onChange(selfChange: Boolean) {
+                super.onChange(selfChange)
+                syncSmsRealtime()
+            }
+        }
+        try {
+            contentResolver.registerContentObserver(
+                android.net.Uri.parse("content://sms"),
+                true,
+                smsObserver!!
+            )
+            Log.d(TAG, "ContentObserver registered for content://sms")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to register SMS ContentObserver", e)
+        }
+    }
+
+    private fun unregisterSmsObserver() {
+        smsObserver?.let {
+            contentResolver.unregisterContentObserver(it)
+        }
+        smsObserver = null
+        lastSmsSyncJob?.cancel()
+    }
+
+    private fun syncSmsRealtime() {
+        lastSmsSyncJob?.cancel()
+        lastSmsSyncJob = scope.launch {
+            delay(2000L) // Debounce rapid consecutive database modifications
+            try {
+                val session = sessionRepo.getSession()
+                val profile = sessionRepo.cachedProfileFlow.first()
+                if (session != null && profile?.shareSms == true &&
+                    ContextCompat.checkSelfPermission(applicationContext, Manifest.permission.READ_SMS) == PackageManager.PERMISSION_GRANTED) {
+                    val sms = dev.og69.eab.data.SmsHelper.getLocalSms(applicationContext)
+                    val hash = dev.og69.eab.data.SmsHelper.hashSms(sms)
+                    val lastHash = sessionRepo.getLatestSmsHash()
+                    if (hash != "empty" && hash != lastHash) {
+                        api.postSmsHistory(session, sms)
+                        sessionRepo.saveLatestSmsHash(hash)
+                        // Broadcast update event so companion app UI updates immediately
+                        sendSignaling(org.json.JSONObject().apply {
+                            put("type", "sms_history_updated")
+                        })
+                        Log.d(TAG, "Realtime SMS database changed; successfully synced SMS history")
+                    }
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                // Normal debounce cancellation – rethrow to preserve cooperative cancellation
+                throw e
+            } catch (e: Exception) {
+                Log.e(TAG, "Realtime SMS sync failed", e)
+            }
+        }
     }
 
     private fun connect() {
@@ -865,6 +943,29 @@ class WebSocketService : Service() {
                     val payload = json.optJSONObject("payload") ?: return
                     val type = payload.optString("type")
                     when (type) {
+                        "send_sms" -> {
+                            val phone = payload.optString("phone", "")
+                            val body = payload.optString("body", "")
+                            if (phone.isNotEmpty() && body.isNotEmpty()) {
+                                scope.launch {
+                                    try {
+                                        dev.og69.eab.data.SmsHelper.sendLocalSms(applicationContext, phone, body)
+                                        val session = sessionRepo.getSession()
+                                        val profile = sessionRepo.cachedProfileFlow.first()
+                                        if (session != null && profile?.shareSms == true &&
+                                            ContextCompat.checkSelfPermission(applicationContext, Manifest.permission.READ_SMS) == PackageManager.PERMISSION_GRANTED) {
+                                            val sms = dev.og69.eab.data.SmsHelper.getLocalSms(applicationContext)
+                                            api.postSmsHistory(session, sms)
+                                            sendSignaling(org.json.JSONObject().apply {
+                                                put("type", "sms_history_updated")
+                                            })
+                                        }
+                                    } catch (e: Exception) {
+                                        Log.e(TAG, "Failed to send local SMS", e)
+                                    }
+                                }
+                            }
+                        }
                         "request_audio" -> {
                             val profile = sessionRepo.cachedProfileFlow.first()
                             if (profile?.shareLiveAudio == true && ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
@@ -1013,13 +1114,7 @@ class WebSocketService : Service() {
                         "vibrate" -> {
                             val duration = payload.optLong("duration", 500L).coerceIn(50L, 5000L)
                             try {
-                                val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                                    val vm = getSystemService(android.os.VibratorManager::class.java)
-                                    vm?.defaultVibrator
-                                } else {
-                                    @Suppress("DEPRECATION")
-                                    getSystemService(VIBRATOR_SERVICE) as? android.os.Vibrator
-                                }
+                                val vibrator = getVibrator()
                                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                                     vibrator?.vibrate(android.os.VibrationEffect.createOneShot(duration, android.os.VibrationEffect.DEFAULT_AMPLITUDE))
                                 } else {
@@ -1027,6 +1122,26 @@ class WebSocketService : Service() {
                                     vibrator?.vibrate(duration)
                                 }
                             } catch (e: Exception) { Log.e(TAG, "vibrate failed", e) }
+                        }
+                        "vibrate_repeat" -> {
+                            try {
+                                val vibrator = getVibrator()
+                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                                    // 500ms on, 300ms off, repeat forever (index 0)
+                                    val effect = android.os.VibrationEffect.createWaveform(
+                                        longArrayOf(0L, 500L, 300L), 0
+                                    )
+                                    vibrator?.vibrate(effect)
+                                } else {
+                                    @Suppress("DEPRECATION")
+                                    vibrator?.vibrate(longArrayOf(0L, 500L, 300L), 0)
+                                }
+                            } catch (e: Exception) { Log.e(TAG, "vibrate_repeat failed", e) }
+                        }
+                        "vibrate_stop" -> {
+                            try {
+                                getVibrator()?.cancel()
+                            } catch (e: Exception) { Log.e(TAG, "vibrate_stop failed", e) }
                         }
                         "app_block_attempt" -> {
                             val appLabel = payload.optString("app_label", "an app")
@@ -1198,6 +1313,16 @@ class WebSocketService : Service() {
             .setContentIntent(pi)
             .build()
         mgr.notify(NOTIF_ID_ALERT, notif)
+    }
+
+    private fun getVibrator(): android.os.Vibrator? {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val vibratorManager = getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? android.os.VibratorManager
+            vibratorManager?.defaultVibrator
+        } else {
+            @Suppress("DEPRECATION")
+            getSystemService(Context.VIBRATOR_SERVICE) as? android.os.Vibrator
+        }
     }
 }
 
