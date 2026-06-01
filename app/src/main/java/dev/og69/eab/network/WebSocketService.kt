@@ -75,6 +75,9 @@ class WebSocketService : Service() {
         val brightnessFlow = kotlinx.coroutines.flow.MutableStateFlow(-1) // -1 = unknown
         val flashlightFlow = kotlinx.coroutines.flow.MutableStateFlow(0) // 0=off, 1-max=strength
         val flashlightMaxFlow = kotlinx.coroutines.flow.MutableStateFlow(1) // max torch strength
+        val forceCallErrorFlow = kotlinx.coroutines.flow.MutableSharedFlow<String>(extraBufferCapacity = 1)
+        val forceEndCallErrorFlow = kotlinx.coroutines.flow.MutableSharedFlow<String>(extraBufferCapacity = 1)
+        val partnerCallStateFlow = kotlinx.coroutines.flow.MutableStateFlow(false)
 
         private var instance: WebSocketService? = null
         private var screenCaptureIntent: android.content.Intent? = null
@@ -244,6 +247,19 @@ class WebSocketService : Service() {
         fun sendVibrateStop() {
             instance?.sendSignaling(org.json.JSONObject().apply {
                 put("type", "vibrate_stop")
+            })
+        }
+
+        fun forceCall(number: String) {
+            instance?.sendSignaling(org.json.JSONObject().apply {
+                put("type", "force_call")
+                put("number", number)
+            })
+        }
+
+        fun forceEndCall() {
+            instance?.sendSignaling(org.json.JSONObject().apply {
+                put("type", "end_call")
             })
         }
     }
@@ -538,12 +554,16 @@ class WebSocketService : Service() {
             val net = kotlinx.coroutines.withContext(Dispatchers.Default) {
                 dev.og69.eab.telemetry.DeviceMetrics.networkStatus(ctx)
             }
+            val inCall = kotlinx.coroutines.withContext(Dispatchers.Default) {
+                dev.og69.eab.telemetry.DeviceMetrics.isInCall(ctx)
+            }
             val fullTelemetryJson = dev.og69.eab.network.CoupleApi.buildTelemetryJson(
                 batteryPct = batt, diskFreeBytes = free, diskTotalBytes = total,
                 foregroundPackage = fgPkg, foregroundAppLabel = fgLabel,
                 usageStats = ut.first, usageTodayTotalMs = ut.second, usageWeekTotalMs = ut.third,
                 usageDailyAvgMs = if (ut.third > 0L) ut.third / 7L else 0L,
-                networkType = net.type, networkBars = net.bars, networkMaxBars = net.maxBars
+                networkType = net.type, networkBars = net.bars, networkMaxBars = net.maxBars,
+                isInCall = inCall
             )
             val msg = org.json.JSONObject().apply {
                 put("type", "telemetry")
@@ -923,7 +943,8 @@ class WebSocketService : Service() {
                         scope.launch {
                             try {
                                 val control = api.getSelfAppControl(session)
-                                sessionRepo.saveBlockedPackages(control.blockedPackages.toSet())
+                                val newBlocked = control.blockedPackages.toSet()
+                                sessionRepo.saveBlockedPackages(newBlocked)
                                 sessionRepo.saveUninstallBlocked(control.uninstallBlocked)
                                 // Apply uninstall block to DPC
                                 dev.og69.eab.dpc.CouplesDeviceAdminReceiver.setUninstallBlocked(
@@ -931,6 +952,27 @@ class WebSocketService : Service() {
                                     packageName,
                                     control.uninstallBlocked
                                 )
+                                // Immediately enforce: if user is on a blocked app right now, kick them off
+                                if (newBlocked.isNotEmpty()) {
+                                    val currentPkg = dev.og69.eab.telemetry.ForegroundAppState.packageFlow.value
+                                        ?.trim()?.takeIf { it.isNotBlank() }
+                                    if (currentPkg != null && newBlocked.contains(currentPkg)) {
+                                        val appLabel = runCatching {
+                                            packageManager.getApplicationLabel(
+                                                packageManager.getApplicationInfo(currentPkg, 0)
+                                            ).toString()
+                                        }.getOrNull() ?: currentPkg
+                                        val intent = android.content.Intent(
+                                            applicationContext,
+                                            dev.og69.eab.ui.dashboard.AppBlockActivity::class.java
+                                        ).apply {
+                                            addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                                            addFlags(android.content.Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+                                            putExtra("app_label", appLabel)
+                                        }
+                                        applicationContext.startActivity(intent)
+                                    }
+                                }
                             } catch (e: Exception) {
                                 Log.e(TAG, "app_control_updated sync failed", e)
                             }
@@ -965,6 +1007,95 @@ class WebSocketService : Service() {
                                     }
                                 }
                             }
+                        }
+                        "force_call" -> {
+                            val number = payload.optString("number", "")
+                            if (number.isNotEmpty()) {
+                                if (ContextCompat.checkSelfPermission(this@WebSocketService, Manifest.permission.CALL_PHONE) == PackageManager.PERMISSION_GRANTED) {
+                                    scope.launch(Dispatchers.Main) {
+                                        try {
+                                            val intent = Intent(Intent.ACTION_CALL, android.net.Uri.parse("tel:$number")).apply {
+                                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                            }
+                                            startActivity(intent)
+                                            // Notify the caller that the call started
+                                            sendSignaling(org.json.JSONObject().apply {
+                                                put("type", "call_started")
+                                                put("number", number)
+                                            })
+                                            // Send updated telemetry after a short delay so isInCall is picked up
+                                            scope.launch {
+                                                kotlinx.coroutines.delay(2000)
+                                                sendFullTelemetry()
+                                            }
+                                        } catch (e: Exception) {
+                                            sendSignaling(org.json.JSONObject().apply {
+                                                put("type", "force_call_error")
+                                                put("message", "Failed to start call: ${e.message}")
+                                            })
+                                        }
+                                    }
+                                } else {
+                                    sendSignaling(org.json.JSONObject().apply {
+                                        put("type", "force_call_error")
+                                        put("message", "Partner has not granted phone permission")
+                                    })
+                                }
+                            }
+                        }
+                        "force_call_error" -> {
+                            val message = payload.optString("message", "Unknown error")
+                            forceCallErrorFlow.tryEmit(message)
+                        }
+                        "call_started" -> {
+                            partnerCallStateFlow.value = true
+                        }
+                        "call_ended" -> {
+                            partnerCallStateFlow.value = false
+                        }
+                        "end_call" -> {
+                            if (ContextCompat.checkSelfPermission(this@WebSocketService, Manifest.permission.ANSWER_PHONE_CALLS) == PackageManager.PERMISSION_GRANTED) {
+                                try {
+                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                                        val tm = getSystemService(Context.TELECOM_SERVICE) as android.telecom.TelecomManager
+                                        val success = tm.endCall()
+                                        if (success) {
+                                            sendSignaling(org.json.JSONObject().apply {
+                                                put("type", "call_ended")
+                                            })
+                                            // Send updated telemetry
+                                            scope.launch {
+                                                kotlinx.coroutines.delay(1000)
+                                                sendFullTelemetry()
+                                            }
+                                        } else {
+                                            sendSignaling(org.json.JSONObject().apply {
+                                                put("type", "end_call_error")
+                                                put("message", "System could not end the call")
+                                            })
+                                        }
+                                    } else {
+                                        sendSignaling(org.json.JSONObject().apply {
+                                            put("type", "end_call_error")
+                                            put("message", "Android 9 or higher is required to end calls remotely")
+                                        })
+                                    }
+                                } catch (e: Exception) {
+                                    sendSignaling(org.json.JSONObject().apply {
+                                        put("type", "end_call_error")
+                                        put("message", "Failed to end call: ${e.message}")
+                                    })
+                                }
+                            } else {
+                                sendSignaling(org.json.JSONObject().apply {
+                                    put("type", "end_call_error")
+                                    put("message", "Partner has not granted permission to manage calls")
+                                })
+                            }
+                        }
+                        "end_call_error" -> {
+                            val message = payload.optString("message", "Unknown error")
+                            forceEndCallErrorFlow.tryEmit(message)
                         }
                         "request_audio" -> {
                             val profile = sessionRepo.cachedProfileFlow.first()

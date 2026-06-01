@@ -142,6 +142,9 @@ class DashboardViewModel(app: Application) : AndroidViewModel(app) {
                     val net = withContext(Dispatchers.Default) {
                         DeviceMetrics.networkStatus(ctx)
                     }
+                    val inCall = withContext(Dispatchers.Default) {
+                        DeviceMetrics.isInCall(ctx)
+                    }
                     val json = CoupleApi.buildTelemetryJson(
                         batteryPct = batt,
                         diskFreeBytes = free,
@@ -155,6 +158,7 @@ class DashboardViewModel(app: Application) : AndroidViewModel(app) {
                         networkType = net.type,
                         networkBars = net.bars,
                         networkMaxBars = net.maxBars,
+                        isInCall = inCall,
                     )
                     withContext(Dispatchers.IO) {
                         api.postTelemetry(session, json)

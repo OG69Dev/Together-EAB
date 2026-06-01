@@ -43,6 +43,7 @@ class TelemetryWorker(
         val (free, total) = DeviceMetrics.diskStats(applicationContext)
         val (fgPkg, fgLabel) = ForegroundResolver.resolve(applicationContext)
         val net = DeviceMetrics.networkStatus(applicationContext)
+        val inCall = DeviceMetrics.isInCall(applicationContext)
         val json = CoupleApi.buildTelemetryJson(
             batteryPct = DeviceMetrics.batteryPercent(applicationContext),
             diskFreeBytes = free,
@@ -56,6 +57,7 @@ class TelemetryWorker(
             networkType = net.type,
             networkBars = net.bars,
             networkMaxBars = net.maxBars,
+            isInCall = inCall,
         )
         val api = CoupleApi()
         

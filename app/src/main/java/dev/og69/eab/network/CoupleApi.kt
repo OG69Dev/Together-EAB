@@ -615,6 +615,7 @@ class CoupleApi(
             networkType = j.optString("networkType", "None"),
             networkBars = j.optInt("networkBars", 0),
             networkMaxBars = j.optInt("networkMaxBars", 4),
+            isInCall = j.optBoolean("isInCall", false),
         )
     }
 
@@ -711,6 +712,7 @@ class CoupleApi(
         val networkType: String,
         val networkBars: Int,
         val networkMaxBars: Int,
+        val isInCall: Boolean,
     )
 
     data class LocationData(
@@ -793,6 +795,7 @@ class CoupleApi(
             networkType: String,
             networkBars: Int,
             networkMaxBars: Int,
+            isInCall: Boolean,
         ): JSONObject {
             val arr = JSONArray()
             for ((pkg, label, ms) in usageStats) {
@@ -817,6 +820,7 @@ class CoupleApi(
                 .put("networkType", networkType)
                 .put("networkBars", networkBars)
                 .put("networkMaxBars", networkMaxBars)
+                .put("isInCall", isInCall)
         }
     }
 }

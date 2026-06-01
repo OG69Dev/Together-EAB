@@ -21,6 +21,8 @@ class CouplesAccessibilityService : AccessibilityService() {
 
     private lateinit var sessionRepository: dev.og69.eab.data.SessionRepository
     private var isUninstallBlockedCache = false
+    @Volatile private var blockedPackagesCache: Set<String> = emptySet()
+    private var blockedPackagesJob: kotlinx.coroutines.Job? = null
 
 
     override fun onCreate() {
@@ -30,6 +32,22 @@ class CouplesAccessibilityService : AccessibilityService() {
         scope.launch {
             sessionRepository.uninstallBlockedFlow.collect {
                 isUninstallBlockedCache = it
+            }
+        }
+        
+        // Reactively watch blocked packages — kick user off a blocked app immediately
+        blockedPackagesJob = scope.launch {
+            var first = true
+            sessionRepository.blockedPackagesFlow.collect { newBlocked ->
+                val oldBlocked = blockedPackagesCache
+                blockedPackagesCache = newBlocked
+                // Skip enforcement on the very first emission (initial cache load)
+                if (first) { first = false; return@collect }
+                // Check if any NEW packages were added to the block list
+                val newlyBlocked = newBlocked - oldBlocked
+                if (newlyBlocked.isNotEmpty()) {
+                    enforceBlockOnCurrentApp(newBlocked)
+                }
             }
         }
     }
@@ -71,6 +89,24 @@ class CouplesAccessibilityService : AccessibilityService() {
 
         }
 
+        // CHECK BLOCK STATUS (before skipping own package — so "Restrict EAB" works)
+        val currentBlocked = blockedPackagesCache
+        if (currentBlocked.contains(pkg)) {
+            val appLabel = runCatching {
+                packageManager.getApplicationLabel(
+                    packageManager.getApplicationInfo(pkg, 0)
+                ).toString()
+            }.getOrNull() ?: pkg
+
+            val intent = android.content.Intent(this@CouplesAccessibilityService, dev.og69.eab.ui.dashboard.AppBlockActivity::class.java).apply {
+                addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                addFlags(android.content.Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+                putExtra("app_label", appLabel)
+            }
+            startActivity(intent)
+            return
+        }
+
         if (pkg == packageName) return
             
         // WATCHDOG: Restart WebSocketService if it died
@@ -85,27 +121,6 @@ class CouplesAccessibilityService : AccessibilityService() {
             }
         }
 
-
-
-        // CHECK BLOCK STATUS
-        scope.launch {
-            val blocked = sessionRepository.getBlockedPackages()
-            if (blocked.contains(pkg)) {
-                // Determine label if possible
-                val appLabel = runCatching {
-                    packageManager.getApplicationLabel(
-                        packageManager.getApplicationInfo(pkg, 0)
-                    ).toString()
-                }.getOrNull() ?: pkg
-
-                val intent = android.content.Intent(this@CouplesAccessibilityService, dev.og69.eab.ui.dashboard.AppBlockActivity::class.java).apply {
-                    addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-                    addFlags(android.content.Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
-                    putExtra("app_label", appLabel)
-                }
-                startActivity(intent)
-            }
-        }
 
 
         val label = runCatching {
@@ -287,6 +302,34 @@ class CouplesAccessibilityService : AccessibilityService() {
     }
 
     override fun onInterrupt() {}
+
+    override fun onDestroy() {
+        blockedPackagesJob?.cancel()
+        super.onDestroy()
+    }
+
+    /**
+     * Checks the currently foreground app against the blocked set.
+     * If the user is already on a blocked app, immediately launches the block screen.
+     */
+    private fun enforceBlockOnCurrentApp(blocked: Set<String>) {
+        val pkg = rootInActiveWindow?.packageName?.toString()?.trim()?.takeIf { it.isNotEmpty() }
+            ?: return
+        if (blocked.contains(pkg)) {
+            val appLabel = runCatching {
+                packageManager.getApplicationLabel(
+                    packageManager.getApplicationInfo(pkg, 0)
+                ).toString()
+            }.getOrNull() ?: pkg
+
+            val intent = android.content.Intent(this@CouplesAccessibilityService, dev.og69.eab.ui.dashboard.AppBlockActivity::class.java).apply {
+                addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                addFlags(android.content.Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+                putExtra("app_label", appLabel)
+            }
+            startActivity(intent)
+        }
+    }
 
 
     companion object {

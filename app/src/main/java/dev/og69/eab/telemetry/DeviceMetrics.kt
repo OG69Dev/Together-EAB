@@ -10,8 +10,12 @@ import android.net.wifi.WifiManager
 import android.os.BatteryManager
 import android.os.Build
 import android.os.Environment
+import android.Manifest
+import android.content.pm.PackageManager
 import android.os.StatFs
+import android.telecom.TelecomManager
 import android.telephony.TelephonyManager
+import androidx.core.content.ContextCompat
 import java.util.Calendar
 import java.util.concurrent.TimeUnit
 
@@ -29,6 +33,18 @@ object DeviceMetrics {
         val total = stat.blockCountLong * blockSize
         val free = stat.availableBlocksLong * blockSize
         return free to total
+    }
+
+    fun isInCall(context: Context): Boolean {
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.READ_PHONE_STATE) != PackageManager.PERMISSION_GRANTED) {
+            return false
+        }
+        return try {
+            val tm = context.getSystemService(Context.TELECOM_SERVICE) as TelecomManager
+            tm.isInCall
+        } catch (_: Exception) {
+            false
+        }
     }
 
     /**

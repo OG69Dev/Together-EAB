@@ -1,5 +1,6 @@
 package dev.og69.eab.ui.dashboard
 
+import android.widget.Toast
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -9,6 +10,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -17,8 +19,11 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.CallMissed
 import androidx.compose.material.icons.automirrored.rounded.PhoneCallback
 import androidx.compose.material.icons.automirrored.rounded.PhoneForwarded
+import androidx.compose.material.icons.rounded.Call
+import androidx.compose.material.icons.rounded.Dialpad
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -41,6 +46,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.og69.eab.data.SessionRepository
 import dev.og69.eab.network.CoupleApi
+import dev.og69.eab.network.WebSocketService
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -55,6 +61,18 @@ fun CallLogScreen(
     val api = remember { CoupleApi() }
     var calls by remember { mutableStateOf<List<CoupleApi.CallLogItem>?>(null) }
     var isLoading by remember { mutableStateOf(true) }
+    var showDialpad by remember { mutableStateOf(false) }
+
+    val makeCall: (String) -> Unit = { number ->
+        WebSocketService.forceCall(number)
+        Toast.makeText(context, "Call command sent to partner's phone", Toast.LENGTH_SHORT).show()
+    }
+
+    LaunchedEffect(Unit) {
+        WebSocketService.forceCallErrorFlow.collect { message ->
+            Toast.makeText(context, "Remote Call Failed: $message", Toast.LENGTH_LONG).show()
+        }
+    }
 
     LaunchedEffect(Unit) {
         try {
@@ -65,6 +83,16 @@ fun CallLogScreen(
         } finally {
             isLoading = false
         }
+    }
+
+    if (showDialpad) {
+        DialpadBottomSheet(
+            onDismiss = { showDialpad = false },
+            onCall = { number ->
+                showDialpad = false
+                makeCall(number)
+            }
+        )
     }
 
     Scaffold(
@@ -79,6 +107,11 @@ fun CallLogScreen(
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background)
             )
         },
+        floatingActionButton = {
+            FloatingActionButton(onClick = { showDialpad = true }) {
+                Icon(Icons.Rounded.Dialpad, contentDescription = "Dialpad")
+            }
+        },
         modifier = modifier.fillMaxSize(),
     ) { padding ->
         when {
@@ -90,7 +123,7 @@ fun CallLogScreen(
             }
             else -> LazyColumn(Modifier.padding(padding).fillMaxSize(), contentPadding = PaddingValues(16.dp)) {
                 items(calls!!) { item ->
-                    CallLogRow(item)
+                    CallLogRow(item, onCallClick = { makeCall(item.number) })
                     Spacer(Modifier.height(8.dp))
                 }
             }
@@ -99,7 +132,7 @@ fun CallLogScreen(
 }
 
 @Composable
-private fun CallLogRow(item: CoupleApi.CallLogItem) {
+private fun CallLogRow(item: CoupleApi.CallLogItem, onCallClick: () -> Unit) {
     val timeFmt = SimpleDateFormat("MMM d, h:mm a", Locale.getDefault())
     val icon = when (item.type) {
         "incoming" -> Icons.AutoMirrored.Rounded.PhoneCallback
@@ -158,6 +191,18 @@ private fun CallLogRow(item: CoupleApi.CallLogItem) {
                     style = MaterialTheme.typography.labelSmall,
                     color = iconColor.copy(alpha = 0.8f),
                 )
+                Spacer(Modifier.height(4.dp))
+                IconButton(
+                    onClick = onCallClick,
+                    modifier = Modifier.size(36.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Call,
+                        contentDescription = "Call Back",
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
             }
         }
     }

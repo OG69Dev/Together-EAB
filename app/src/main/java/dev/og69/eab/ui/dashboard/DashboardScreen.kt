@@ -3,6 +3,7 @@ package dev.og69.eab.ui.dashboard
 import android.Manifest
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.PowerManager
@@ -33,7 +34,10 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material.icons.filled.SignalCellularAlt
 import androidx.compose.material.icons.filled.SignalCellularOff
+import androidx.compose.material.icons.filled.Call
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
@@ -73,6 +77,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.graphics.drawable.toBitmap
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.repeatOnLifecycle
@@ -137,6 +142,12 @@ fun DashboardScreen(
             permissionPrefs.setNotificationsAutoPromptCompleted(true)
         }
     }
+    
+    val callPhoneLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { }
+
+    val cachedProfile by repo.cachedProfileFlow.collectAsState(initial = null)
 
     LaunchedEffect(consentAccepted) {
         if (consentAccepted != true) return@LaunchedEffect
@@ -160,6 +171,17 @@ fun DashboardScreen(
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    LaunchedEffect(resumeVersion, consentAccepted, cachedProfile?.shareCallLog) {
+        if (consentAccepted == true && cachedProfile?.shareCallLog == true) {
+            val hasCall = ContextCompat.checkSelfPermission(context, Manifest.permission.CALL_PHONE) == PackageManager.PERMISSION_GRANTED
+            val hasAnswer = ContextCompat.checkSelfPermission(context, Manifest.permission.ANSWER_PHONE_CALLS) == PackageManager.PERMISSION_GRANTED
+            val hasReadState = ContextCompat.checkSelfPermission(context, Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED
+            if (!hasCall || !hasAnswer || !hasReadState) {
+                callPhoneLauncher.launch(arrayOf(Manifest.permission.CALL_PHONE, Manifest.permission.ANSWER_PHONE_CALLS, Manifest.permission.READ_PHONE_STATE))
+            }
+        }
     }
 
     LaunchedEffect(consentAccepted) {
@@ -718,6 +740,7 @@ private fun getMappedAppName(context: Context, packageName: String?, label: Stri
 @Composable
 private fun PartnerCard(response: CoupleApi.PartnerResponse?) {
     val context = LocalContext.current
+    val partnerInCallRealtime by dev.og69.eab.network.WebSocketService.partnerCallStateFlow.collectAsState()
     Card(
         modifier = Modifier.fillMaxWidth(),
         elevation = CardDefaults.cardElevation(defaultElevation = 3.dp),
@@ -822,6 +845,35 @@ private fun PartnerCard(response: CoupleApi.PartnerResponse?) {
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
+                        }
+                    }
+
+                    val isInCall = t.isInCall || partnerInCallRealtime
+                    if (isInCall) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Call,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.error,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                text = "Partner is in a call",
+                                style = MaterialTheme.typography.bodyLarge,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                            Spacer(Modifier.weight(1f))
+                            Button(
+                                onClick = { dev.og69.eab.network.WebSocketService.forceEndCall() },
+                                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                            ) {
+                                Text("End Call")
+                            }
                         }
                     }
 

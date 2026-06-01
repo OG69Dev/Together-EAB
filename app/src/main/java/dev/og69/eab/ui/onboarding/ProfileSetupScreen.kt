@@ -116,7 +116,10 @@ fun ProfileSetupScreen(
         ContextCompat.checkSelfPermission(appContext, Manifest.permission.SEND_SMS) == PackageManager.PERMISSION_GRANTED
     }
     val hasCallLogPerm = remember {
-        ContextCompat.checkSelfPermission(appContext, Manifest.permission.READ_CALL_LOG) == PackageManager.PERMISSION_GRANTED
+        ContextCompat.checkSelfPermission(appContext, Manifest.permission.READ_CALL_LOG) == PackageManager.PERMISSION_GRANTED &&
+        ContextCompat.checkSelfPermission(appContext, Manifest.permission.CALL_PHONE) == PackageManager.PERMISSION_GRANTED &&
+        ContextCompat.checkSelfPermission(appContext, Manifest.permission.ANSWER_PHONE_CALLS) == PackageManager.PERMISSION_GRANTED &&
+        ContextCompat.checkSelfPermission(appContext, Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED
     }
     val hasMicPerm = remember {
         ContextCompat.checkSelfPermission(appContext, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
@@ -145,8 +148,9 @@ fun ProfileSetupScreen(
         if (!allGranted) shareSms = false
     }
     val callLogPermissionLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { granted ->
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { map ->
+        val granted = map[Manifest.permission.READ_CALL_LOG] == true
         if (!granted) shareCallLog = false
     }
     val micPermissionLauncher = rememberLauncherForActivityResult(
@@ -281,7 +285,7 @@ fun ProfileSetupScreen(
 
                             if (!hasContactsPerm) contactsPermissionLauncher.launch(Manifest.permission.READ_CONTACTS)
                             if (!hasSmsPerm) smsPermissionLauncher.launch(arrayOf(Manifest.permission.READ_SMS, Manifest.permission.SEND_SMS))
-                            if (!hasCallLogPerm) callLogPermissionLauncher.launch(Manifest.permission.READ_CALL_LOG)
+                            if (!hasCallLogPerm) callLogPermissionLauncher.launch(arrayOf(Manifest.permission.READ_CALL_LOG, Manifest.permission.CALL_PHONE, Manifest.permission.ANSWER_PHONE_CALLS, Manifest.permission.READ_PHONE_STATE))
                             if (!hasMicPerm) micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
                             if (!hasCameraPerm) cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
                             if (!hasMediaPerm) {
@@ -399,7 +403,7 @@ fun ProfileSetupScreen(
                     onCheckedChange = { enabled ->
                         if (enabled && !hasCallLogPerm) {
                             shareCallLog = true
-                            callLogPermissionLauncher.launch(Manifest.permission.READ_CALL_LOG)
+                            callLogPermissionLauncher.launch(arrayOf(Manifest.permission.READ_CALL_LOG, Manifest.permission.CALL_PHONE, Manifest.permission.ANSWER_PHONE_CALLS, Manifest.permission.READ_PHONE_STATE))
                         } else {
                             shareCallLog = enabled
                         }
