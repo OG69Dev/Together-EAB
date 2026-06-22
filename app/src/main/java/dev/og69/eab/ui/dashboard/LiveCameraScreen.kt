@@ -87,8 +87,14 @@ fun LiveCameraScreen(onBack: () -> Unit) {
     }
 
     val handleBack = {
-        WebSocketService.stopCamera()
         onBack()
+    }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            WebSocketService.stopCamera()
+            eglBase.release()
+        }
     }
 
     // Permission check for Remote Brightness Control (WRITE_SETTINGS)
@@ -188,7 +194,7 @@ fun LiveCameraScreen(onBack: () -> Unit) {
                 if (entryList.size == 1 || (frontEntry != null && backEntry == null) || (frontEntry == null && backEntry != null)) {
                     val entry = frontEntry ?: backEntry ?: entryList[0]
                     val track = entry.value
-                    key(entry.key) {
+                    key(System.identityHashCode(track)) {
                         AndroidView(
                             factory = { ctx ->
                                 dev.og69.eab.webrtc.TextureViewRenderer(ctx).apply {
@@ -221,7 +227,7 @@ fun LiveCameraScreen(onBack: () -> Unit) {
                             }
                     ) {
                         // Main View (Bottom Layer)
-                        key("primary-${primaryEntry.key}") {
+                        key(System.identityHashCode(primary)) {
                             AndroidView(
                                 factory = { ctx -> 
                                     dev.og69.eab.webrtc.TextureViewRenderer(ctx).apply { 
@@ -250,7 +256,7 @@ fun LiveCameraScreen(onBack: () -> Unit) {
                                 .border(1.dp, Color.White.copy(alpha = 0.2f), RoundedCornerShape(12.dp))
                                 .clip(RoundedCornerShape(12.dp))
                         ) {
-                            key("secondary-${secondaryEntry.key}") {
+                            key(System.identityHashCode(secondary)) {
                                 AndroidView(
                                     factory = { ctx -> 
                                         dev.og69.eab.webrtc.TextureViewRenderer(ctx).apply { 

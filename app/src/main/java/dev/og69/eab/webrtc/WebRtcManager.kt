@@ -263,15 +263,20 @@ class WebRtcManager(
                 setupDataChannelInitiator()
             }
 
-            when (this@WebRtcManager.role) {
-                Role.STREAMER -> setupStreamer()
-                Role.SCREEN_STREAMER -> setupScreenStreamer(mediaProjectionIntent)
-                Role.SCREEN_LISTENER -> setupScreenListener()
-                Role.LISTENER -> setupListener()
-                Role.MEDIA_PROVIDER -> setupMediaProvider()
-                Role.MEDIA_CONSUMER -> setupMediaConsumer()
-                Role.CAMERA_STREAMER -> setupCameraStreamer(cameraMode)
-                Role.CAMERA_LISTENER -> setupCameraListener()
+            try {
+                when (this@WebRtcManager.role) {
+                    Role.STREAMER -> setupStreamer()
+                    Role.SCREEN_STREAMER -> setupScreenStreamer(mediaProjectionIntent)
+                    Role.SCREEN_LISTENER -> setupScreenListener()
+                    Role.LISTENER -> setupListener()
+                    Role.MEDIA_PROVIDER -> setupMediaProvider()
+                    Role.MEDIA_CONSUMER -> setupMediaConsumer()
+                    Role.CAMERA_STREAMER -> setupCameraStreamer(cameraMode)
+                    Role.CAMERA_LISTENER -> setupCameraListener()
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to setup streamer/listener for role ${this@WebRtcManager.role}", e)
+                onStateChange(State.ERROR)
             }
 
             // Drain any signaling messages that arrived while PeerConnection was being created
@@ -589,6 +594,10 @@ class WebRtcManager(
             for (sender in senders) {
                 try { peerConnection?.removeTrack(sender) } catch (e: Exception) { Log.e(TAG, "removeTrack failed", e) }
             }
+            // FLUSH CACHE: WebRTC Android caches RtpSenders. We must call getSenders() after removeTrack 
+            // so the old wrappers are disposed and removed from the cache, preventing PeerConnection.dispose() 
+            // from crashing later with "RtpSender has been disposed".
+            peerConnection?.senders
             
             // 3. SAFETY DELAY: Give the Android MediaServer a moment to fully release sensors
             delay(500)
@@ -756,6 +765,10 @@ class WebRtcManager(
                 Log.d(TAG, "Partner screen share is disabled or permission missing")
                 onStateChange(State.ERROR)
             }
+            "camera_disabled" -> {
+                Log.d(TAG, "Partner camera is disabled or permission missing")
+                onStateChange(State.ERROR)
+            }
         }
     }
 
@@ -829,6 +842,7 @@ class WebRtcManager(
         Log.d(TAG, "Stopping WebRtcManager")
         state = State.IDLE
         onStateChange(State.IDLE)
+        pendingSignaling.clear()
 
         // 1. Stop and dispose capturers first (they feed into sources)
         videoCapturer?.stopCapture()
@@ -842,10 +856,8 @@ class WebRtcManager(
         secondarySurfaceTextureHelper?.dispose()
         secondarySurfaceTextureHelper = null
 
-        // 2. Remove tracks from peer connection before closing it (#6)
-        peerConnection?.senders?.forEach { sender ->
-            try { peerConnection?.removeTrack(sender) } catch (_: Exception) {}
-        }
+        // 2. Track removal is handled automatically by peerConnection.dispose()
+        // Calling removeTrack here causes IllegalStateException: RtpSender has been disposed
 
         // 3. Close data channels
         dataChannel?.dispose()
@@ -873,6 +885,7 @@ class WebRtcManager(
         secondaryLocalVideoTrack = null
         secondaryLocalVideoSource?.dispose()
         secondaryLocalVideoSource = null
+        remoteVideoTrack?.dispose()
         remoteVideoTrack = null
     }
 

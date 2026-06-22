@@ -71,8 +71,14 @@ fun LiveScreenViewScreen(onBack: () -> Unit) {
     var containerSize by remember { mutableStateOf(androidx.compose.ui.unit.IntSize.Zero) }
 
     val handleBack = {
-        WebSocketService.stopScreen()
         onBack()
+    }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            WebSocketService.stopScreen()
+            eglBase.release()
+        }
     }
 
     Scaffold(
@@ -136,7 +142,7 @@ fun LiveScreenViewScreen(onBack: () -> Unit) {
         ) {
             if (remoteTrack != null) {
                 val track = remoteTrack
-                key(track?.id() ?: "") {
+                key(System.identityHashCode(track)) {
                     AndroidView(
                         factory = { ctx ->
                             dev.og69.eab.webrtc.TextureViewRenderer(ctx).apply {

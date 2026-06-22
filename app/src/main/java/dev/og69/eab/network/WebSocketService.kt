@@ -168,12 +168,14 @@ class WebSocketService : Service() {
             screenCaptureIntent = data
             instance?.let { srv ->
                 srv.ensureWebRtc()
-                srv.updateForegroundService("Screen Share Active")
-                srv.scope.launch {
-                    delay(500)
-                    srv.webRtcManager?.start(dev.og69.eab.webrtc.WebRtcManager.Role.SCREEN_STREAMER, data)
+                val success = srv.updateForegroundService("Screen Share Active", dev.og69.eab.webrtc.WebRtcManager.Role.SCREEN_STREAMER)
+                if (success) {
+                    srv.scope.launch {
+                        delay(500)
+                        srv.webRtcManager?.start(dev.og69.eab.webrtc.WebRtcManager.Role.SCREEN_STREAMER, data)
+                    }
+                    srv.startOverlay()
                 }
-                srv.startOverlay()
             }
         }
 
@@ -888,10 +890,23 @@ class WebSocketService : Service() {
         }
     }
 
-    fun stopAudio() { webRtcManager?.stop(); updateNotification("Connected") }
-    fun stopScreen() { webRtcManager?.stop(); stopOverlay(); screenCaptureIntent = null; updateForegroundService("Connected") }
-    fun stopCamera() { webRtcManager?.stop(); updateForegroundService("Connected") }
-    
+    fun stopAudio() {
+        webRtcManager?.stop()
+        updateNotification("Connected")
+    }
+    fun stopScreen() {
+        webRtcManager?.stop()
+        remoteVideoTracksFlow.value = emptyMap()
+        stopOverlay()
+        screenCaptureIntent = null
+        updateForegroundService("Connected")
+    }
+    fun stopCamera() {
+        webRtcManager?.stop()
+        remoteVideoTracksFlow.value = emptyMap()
+        updateForegroundService("Connected")
+    }
+
     fun requestMedia() {
         mediaActiveCount++
         mediaStopJob?.cancel()
@@ -1099,37 +1114,67 @@ class WebSocketService : Service() {
                         }
                         "request_audio" -> {
                             val profile = sessionRepo.cachedProfileFlow.first()
-                            if (profile?.shareLiveAudio == true && ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
-                                ensureWebRtc(); webRtcManager?.start(dev.og69.eab.webrtc.WebRtcManager.Role.STREAMER); updateNotification("Live Audio Active")
+                            if (profile?.shareLiveAudio == true) {
+                                ensureWebRtc()
+                                val success = updateForegroundService("Live Audio Active", dev.og69.eab.webrtc.WebRtcManager.Role.STREAMER)
+                                
+                                if (success) {
+                                    webRtcManager?.start(dev.og69.eab.webrtc.WebRtcManager.Role.STREAMER)
+                                } else {
+                                    sendSignaling(org.json.JSONObject().apply { put("type", "audio_disabled") })
+                                }
+                            } else {
+                                sendSignaling(org.json.JSONObject().apply {
+                                    put("type", "audio_disabled")
+                                })
                             }
                         }
                         "request_screen" -> {
                             val profile = sessionRepo.cachedProfileFlow.first()
                             if (profile?.shareScreenView == true) {
                                 if (screenCaptureIntent != null) {
-                                    ensureWebRtc(); updateForegroundService("Screen Share Active"); scope.launch { delay(500); webRtcManager?.start(dev.og69.eab.webrtc.WebRtcManager.Role.SCREEN_STREAMER, screenCaptureIntent) }
+                                    ensureWebRtc()
+                                    val success = updateForegroundService("Screen Share Active", dev.og69.eab.webrtc.WebRtcManager.Role.SCREEN_STREAMER)
+                                    if (success) {
+                                        scope.launch { delay(500); webRtcManager?.start(dev.og69.eab.webrtc.WebRtcManager.Role.SCREEN_STREAMER, screenCaptureIntent) }
+                                    } else {
+                                        sendSignaling(org.json.JSONObject().apply { put("type", "screen_disabled") })
+                                    }
                                 } else MainActivity.requestScreenCapture(this@WebSocketService)
+                            } else {
+                                sendSignaling(org.json.JSONObject().apply {
+                                    put("type", "screen_disabled")
+                                })
                             }
                         }
                         "request_camera" -> {
                             val profile = sessionRepo.cachedProfileFlow.first()
-                            if (profile?.shareLiveCamera == true && ContextCompat.checkSelfPermission(this@WebSocketService, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
+                            if (profile?.shareLiveCamera == true) {
                                 ensureWebRtc()
                                 val mode = payload.optString("mode", "front")
-                                webRtcManager?.start(dev.og69.eab.webrtc.WebRtcManager.Role.CAMERA_STREAMER, null, mode)
-                                updateForegroundService("Live Camera Active")
+                                val success = updateForegroundService("Live Camera Active", dev.og69.eab.webrtc.WebRtcManager.Role.CAMERA_STREAMER)
                                 
-                                // Broadcast current states to the requester
-                                val currentBrightness = brightnessFlow.value
-                                if (currentBrightness != -1) {
+                                if (success) {
+                                    webRtcManager?.start(dev.og69.eab.webrtc.WebRtcManager.Role.CAMERA_STREAMER, null, mode)
+                                    
+                                    // Broadcast current states to the requester
+                                    val currentBrightness = brightnessFlow.value
+                                    if (currentBrightness != -1) {
+                                        sendSignaling(org.json.JSONObject().apply {
+                                            put("type", "brightness_changed")
+                                            put("level", currentBrightness)
+                                        })
+                                    }
                                     sendSignaling(org.json.JSONObject().apply {
-                                        put("type", "brightness_changed")
-                                        put("level", currentBrightness)
+                                        put("type", "flashlight_changed")
+                                        put("level", flashlightFlow.value)
                                     })
+                                } else {
+                                    sendSignaling(org.json.JSONObject().apply { put("type", "camera_disabled") })
                                 }
+                            } else {
                                 sendSignaling(org.json.JSONObject().apply {
-                                    put("type", "flashlight_changed")
-                                    put("level", flashlightFlow.value)
+                                    put("type", "camera_disabled")
                                 })
                             }
                         }
@@ -1377,20 +1422,21 @@ class WebSocketService : Service() {
     }
 
 
-    private fun updateForegroundService(content: String) {
+    private fun updateForegroundService(content: String, targetRole: dev.og69.eab.webrtc.WebRtcManager.Role? = null): Boolean {
         if (Build.VERSION.SDK_INT >= 29) {
-            var type = android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+            // Use SPECIAL_USE (1073741824) to avoid the strict 6-hour DATA_SYNC time limit on Android 14+
+            var type = if (Build.VERSION.SDK_INT >= 34) {
+                1073741824 // FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+            } else {
+                android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+            }
             
-            val role = webRtcManager?.role
+            val role = targetRole ?: webRtcManager?.role
             if (role == dev.og69.eab.webrtc.WebRtcManager.Role.STREAMER) {
-                if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
-                    type = type or android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
-                }
+                type = type or android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
             }
             if (role == dev.og69.eab.webrtc.WebRtcManager.Role.CAMERA_STREAMER && Build.VERSION.SDK_INT >= 30) {
-                if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
-                    type = type or android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA
-                }
+                type = type or android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA
             }
             if (role == dev.og69.eab.webrtc.WebRtcManager.Role.SCREEN_STREAMER && screenCaptureIntent != null) {
                 type = type or android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
@@ -1401,23 +1447,26 @@ class WebSocketService : Service() {
                 }
             }
 
-            try { 
+            return try { 
                 startForeground(NOTIF_ID, buildNotification(content), type) 
+                true
             } catch (e: Exception) { 
                 Log.e(TAG, "updateForegroundService failed with type $type", e)
                 try {
-                    startForeground(NOTIF_ID, buildNotification(content), android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+                    val fallbackType = if (Build.VERSION.SDK_INT >= 34) 1073741824 else android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+                    startForeground(NOTIF_ID, buildNotification(content), fallbackType)
                 } catch (e2: Exception) {
-                    Log.e(TAG, "updateForegroundService fallback failed", e2)
-                    stopSelf()
+                    Log.e(TAG, "updateForegroundService fallback also failed", e2)
                 }
+                false
             }
         } else {
-            try {
+            return try {
                 startForeground(NOTIF_ID, buildNotification(content))
+                true
             } catch (e: Exception) {
                 Log.e(TAG, "updateForegroundService legacy failed", e)
-                stopSelf()
+                false
             }
         }
     }

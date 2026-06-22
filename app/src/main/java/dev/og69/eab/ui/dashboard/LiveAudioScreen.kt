@@ -48,7 +48,13 @@ fun LiveAudioScreen(onBack: () -> Unit) {
             }
         }
     }
-    
+
+    DisposableEffect(Unit) {
+        onDispose {
+            WebSocketService.stopAudio()
+        }
+    }
+
     // Status text and color based on WebRTC state
     val statusText = when (state) {
         WebRtcManager.State.IDLE -> "Ready to Connect"
