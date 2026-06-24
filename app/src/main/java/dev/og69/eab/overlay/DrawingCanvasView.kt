@@ -11,7 +11,7 @@ class DrawingCanvasView @JvmOverloads constructor(
 ) : View(context, attrs, defStyleAttr) {
 
     sealed class OverlayItem {
-        data class Stroke(val path: Path, val color: Int) : OverlayItem()
+        data class Stroke(val path: Path, val color: Int, val width: Float) : OverlayItem()
         data class Emoji(val text: String, val x: Float, val y: Float) : OverlayItem()
         data class Text(val text: String, val x: Float, val y: Float, val color: Int) : OverlayItem()
     }
@@ -49,11 +49,12 @@ class DrawingCanvasView @JvmOverloads constructor(
                     val x = json.optDouble("x").toFloat() * width
                     val y = json.optDouble("y").toFloat() * height
                     val color = json.optInt("color", Color.RED)
+                    val width = json.optDouble("width", 12.0).toFloat()
                     
                     when (action) {
                         "down" -> {
                             val path = Path().apply { moveTo(x, y) }
-                            val stroke = OverlayItem.Stroke(path, color)
+                            val stroke = OverlayItem.Stroke(path, color, width)
                             currentStroke = stroke
                             items.add(stroke)
                         }
@@ -95,6 +96,7 @@ class DrawingCanvasView @JvmOverloads constructor(
             when (item) {
                 is OverlayItem.Stroke -> {
                     strokePaint.color = item.color
+                    strokePaint.strokeWidth = item.width
                     canvas.drawPath(item.path, strokePaint)
                 }
                 is OverlayItem.Emoji -> {

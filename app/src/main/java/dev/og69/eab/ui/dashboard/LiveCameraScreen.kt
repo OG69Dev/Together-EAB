@@ -17,6 +17,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -60,6 +64,39 @@ fun LiveCameraScreen(onBack: () -> Unit) {
     val haptic = LocalHapticFeedback.current
     var switchingMode by remember { mutableStateOf(false) }
     var isFrontPrimary by remember { mutableStateOf(false) }
+    var isBuzzingRepeat by remember { mutableStateOf(false) }
+
+    var scale by remember { mutableFloatStateOf(1f) }
+    var offsetX by remember { mutableFloatStateOf(0f) }
+    var offsetY by remember { mutableFloatStateOf(0f) }
+
+    LaunchedEffect(cameraMode, isFrontPrimary) {
+        scale = 1f
+        offsetX = 0f
+        offsetY = 0f
+    }
+
+    val zoomModifier = Modifier
+        .graphicsLayer(
+            scaleX = scale,
+            scaleY = scale,
+            translationX = offsetX,
+            translationY = offsetY
+        )
+        .pointerInput(Unit) {
+            detectTransformGestures { _, pan, zoom, _ ->
+                scale = (scale * zoom).coerceIn(1f, 5f)
+                if (scale > 1f) {
+                    val maxX = (size.width * (scale - 1)) / 2f
+                    val maxY = (size.height * (scale - 1)) / 2f
+                    offsetX = (offsetX + pan.x * scale).coerceIn(-maxX, maxX)
+                    offsetY = (offsetY + pan.y * scale).coerceIn(-maxY, maxY)
+                } else {
+                    offsetX = 0f
+                    offsetY = 0f
+                }
+            }
+        }
 
     // Dimmer / flashlight state
     var showDimmer by remember { mutableStateOf(false) }
@@ -207,7 +244,7 @@ fun LiveCameraScreen(onBack: () -> Unit) {
                                 try { track.removeSink(view) } catch (e: Exception) { e.printStackTrace() }
                                 view.release() 
                             },
-                            modifier = Modifier.fillMaxSize()
+                            modifier = Modifier.fillMaxSize().then(zoomModifier)
                         )
                     }
                     LaunchedEffect(track) { try { track.setEnabled(true) } catch (e: Exception) {} }
@@ -240,7 +277,7 @@ fun LiveCameraScreen(onBack: () -> Unit) {
                                     try { primary.removeSink(view) } catch (e: Exception) {}
                                     view.release() 
                                 },
-                                modifier = Modifier.fillMaxSize()
+                                modifier = Modifier.fillMaxSize().then(zoomModifier)
                             )
                         }
                         LaunchedEffect(primary) { try { primary.setEnabled(true) } catch(e: Exception) {} }
@@ -506,39 +543,54 @@ fun LiveCameraScreen(onBack: () -> Unit) {
                                 )
                             }
 
-                            // Flashlight quick toggle (tap to toggle full/off)
-                            IconButton(
-                                onClick = {
-                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                    if (flashlightLevel > 0) {
-                                        flashSlider = 0f
-                                        WebSocketService.setFlashlight(0)
-                                    } else {
-                                        val maxVal = flashlightMax.toFloat().coerceAtLeast(1f)
-                                        flashSlider = maxVal
-                                        WebSocketService.setFlashlight(flashlightMax)
-                                    }
-                                },
-                                modifier = Modifier.background(
-                                    if (flashlightLevel > 0) Color(0xFFFF9800).copy(alpha = 0.25f) else Color.Transparent,
-                                    CircleShape
-                                )
+                            // Buzz toggle (tap for single, long press for continuous)
+                            Box(
+                                modifier = Modifier
+                                    .size(48.dp)
+                                    .clip(CircleShape)
+                                    .background(
+                                        if (isBuzzingRepeat) Color(0xFFF44336).copy(alpha = 0.25f) else Color.Transparent
+                                    )
+                                    .pointerInput(Unit) {
+                                        detectTapGestures(
+                                            onTap = {
+                                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                                if (isBuzzingRepeat) {
+                                                    WebSocketService.sendVibrateStop()
+                                                    isBuzzingRepeat = false
+                                                    android.widget.Toast.makeText(context, "Stopped buzzing ⏹️", android.widget.Toast.LENGTH_SHORT).show()
+                                                } else {
+                                                    WebSocketService.sendVibrate()
+                                                    android.widget.Toast.makeText(context, "Buzz sent! 📳", android.widget.Toast.LENGTH_SHORT).show()
+                                                }
+                                            },
+                                            onLongPress = {
+                                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                                if (!isBuzzingRepeat) {
+                                                    WebSocketService.sendVibrateRepeat()
+                                                    isBuzzingRepeat = true
+                                                    android.widget.Toast.makeText(context, "Continuous buzz started! 🔁", android.widget.Toast.LENGTH_SHORT).show()
+                                                }
+                                            }
+                                        )
+                                    },
+                                contentAlignment = Alignment.Center
                             ) {
                                 Icon(
-                                    Icons.Rounded.FlashlightOn,
-                                    contentDescription = "Flashlight",
-                                    tint = if (flashlightLevel > 0) Color(0xFFFF9800) else Color.White.copy(alpha = 0.5f)
+                                    Icons.Rounded.Vibration,
+                                    contentDescription = "Buzz",
+                                    tint = if (isBuzzingRepeat) Color(0xFFF44336) else Color.White.copy(alpha = 0.5f)
                                 )
                             }
                         }
                     }
                 }
             } else {
-                // Clear switchingMode immediately when we drop to the loading/disconnected state
-                LaunchedEffect(Unit) { switchingMode = false }
-                LoadingState(state, retryCount > 0) { 
-                    retryCount = 0
-                    WebSocketService.requestCamera(cameraMode) 
+                if (!switchingMode) {
+                    LoadingState(state, retryCount > 0) { 
+                        retryCount = 0
+                        WebSocketService.requestCamera(cameraMode) 
+                    }
                 }
             }
 

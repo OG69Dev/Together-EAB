@@ -61,7 +61,9 @@ fun LiveScreenViewScreen(onBack: () -> Unit) {
 
     // Toolkit State
     var currentTool by remember { mutableStateOf(Tool.BRUSH) }
-    var currentColor by remember { mutableStateOf(Color.Red) }
+    var currentColor by remember { mutableStateOf(Color.Red.copy(alpha = 0.5f)) }
+    var currentStrokeSize by remember { mutableFloatStateOf(12f) }
+    var showColorPicker by remember { mutableStateOf(false) }
     var selectedEmoji by remember { mutableStateOf("❤️") }
     var showTextInput by remember { mutableStateOf<androidx.compose.ui.geometry.Offset?>(null) }
     var textBuffer by remember { mutableStateOf("") }
@@ -191,6 +193,7 @@ fun LiveScreenViewScreen(onBack: () -> Unit) {
                                                     put("x", normalizedX.toDouble())
                                                     put("y", normalizedY.toDouble())
                                                     put("color", currentColor.toArgb())
+                                                    put("width", currentStrokeSize.toDouble())
                                                 }.toString()
                                             )
                                         }
@@ -268,8 +271,14 @@ fun LiveScreenViewScreen(onBack: () -> Unit) {
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 if (currentTool == Tool.BRUSH || currentTool == Tool.TEXT) {
-                                    listOf(Color.Red, Color.Cyan, Color.Green, Color.Yellow, Color.White).forEach { color ->
+                                    listOf(Color.Red, Color.Cyan, Color.Green, Color.Yellow, Color.White).map { it.copy(alpha = 0.5f) }.forEach { color ->
                                         ColorDot(color, currentColor == color) { currentColor = color }
+                                    }
+                                    IconButton(
+                                        onClick = { showColorPicker = true },
+                                        modifier = Modifier.size(32.dp).background(Color.White.copy(alpha = 0.2f), androidx.compose.foundation.shape.CircleShape)
+                                    ) {
+                                        Icon(Icons.Rounded.ColorLens, contentDescription = "Custom Color", tint = Color.White, modifier = Modifier.size(20.dp))
                                     }
                                 } else if (currentTool == Tool.EMOJI) {
                                     listOf("❤️", "😂", "😮", "🔥", "👍", "😭", "💯").forEach { emoji ->
@@ -286,6 +295,16 @@ fun LiveScreenViewScreen(onBack: () -> Unit) {
                     WebSocketService.requestScreen() 
                 }
             }
+        }
+
+        if (showColorPicker) {
+            ColorPickerDialog(
+                initialColor = currentColor,
+                initialSize = currentStrokeSize,
+                onColorSelected = { currentColor = it },
+                onSizeSelected = { currentStrokeSize = it },
+                onDismiss = { showColorPicker = false }
+            )
         }
 
         // Text Input Dialog

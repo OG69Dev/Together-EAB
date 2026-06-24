@@ -452,7 +452,7 @@ class WebRtcManager(
                 // Use a standard 16:9 or 4:3 resolution to ensure hardware compatibility
                 videoCapturer?.startCapture(640, 480, 24)
                 
-                localVideoTrack = peerConnectionFactory?.createVideoTrack("CAMF0", localVideoSource)
+                localVideoTrack = peerConnectionFactory?.createVideoTrack("CAMF0_${java.util.UUID.randomUUID().toString().take(8)}", localVideoSource)
                 val sender = peerConnection?.addTrack(localVideoTrack, listOf("ARDAMS"))
                 sender?.let { tuneCameraTrackParameters(it, isFront = true) }
             }
@@ -466,7 +466,7 @@ class WebRtcManager(
                     localVideoSource = peerConnectionFactory?.createVideoSource(false)
                     videoCapturer?.initialize(surfaceTextureHelper, context, localVideoSource?.capturerObserver)
                     videoCapturer?.startCapture(640, 480, 24)
-                    localVideoTrack = peerConnectionFactory?.createVideoTrack("CAMB0", localVideoSource)
+                    localVideoTrack = peerConnectionFactory?.createVideoTrack("CAMB0_${java.util.UUID.randomUUID().toString().take(8)}", localVideoSource)
                     val sender = peerConnection?.addTrack(localVideoTrack, listOf("ARDAMS"))
                     sender?.let { tuneCameraTrackParameters(it, isFront = false) }
                 } else {
@@ -478,7 +478,7 @@ class WebRtcManager(
                     // Slightly lower res for second stream in "Both" mode to ensure stability
                     secondaryVideoCapturer?.startCapture(480, 360, 15)
                     
-                    secondaryLocalVideoTrack = peerConnectionFactory?.createVideoTrack("CAMB1", secondaryLocalVideoSource)
+                    secondaryLocalVideoTrack = peerConnectionFactory?.createVideoTrack("CAMB1_${java.util.UUID.randomUUID().toString().take(8)}", secondaryLocalVideoSource)
                     val sender = peerConnection?.addTrack(secondaryLocalVideoTrack, listOf("ARDAMS"))
                     sender?.let { tuneCameraTrackParameters(it, isFront = false) }
                 }

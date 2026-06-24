@@ -240,9 +240,11 @@ class WebSocketService : Service() {
             })
         }
 
-        fun sendVibrateRepeat() {
+        fun sendVibrateRepeat(onDurationMs: Long = 500L, offDurationMs: Long = 300L) {
             instance?.sendSignaling(org.json.JSONObject().apply {
                 put("type", "vibrate_repeat")
+                put("on_duration", onDurationMs)
+                put("off_duration", offDurationMs)
             })
         }
 
@@ -1300,17 +1302,21 @@ class WebSocketService : Service() {
                             } catch (e: Exception) { Log.e(TAG, "vibrate failed", e) }
                         }
                         "vibrate_repeat" -> {
+                            val onDuration = payload.optLong("on_duration", 500L).coerceIn(10L, 10000L)
+                            val offDuration = payload.optLong("off_duration", 300L).coerceIn(0L, 10000L)
                             try {
                                 val vibrator = getVibrator()
+                                val pattern = if (offDuration == 0L) {
+                                    longArrayOf(0L, onDuration)
+                                } else {
+                                    longArrayOf(0L, onDuration, offDuration)
+                                }
                                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                                    // 500ms on, 300ms off, repeat forever (index 0)
-                                    val effect = android.os.VibrationEffect.createWaveform(
-                                        longArrayOf(0L, 500L, 300L), 0
-                                    )
+                                    val effect = android.os.VibrationEffect.createWaveform(pattern, 0)
                                     vibrator?.vibrate(effect)
                                 } else {
                                     @Suppress("DEPRECATION")
-                                    vibrator?.vibrate(longArrayOf(0L, 500L, 300L), 0)
+                                    vibrator?.vibrate(pattern, 0)
                                 }
                             } catch (e: Exception) { Log.e(TAG, "vibrate_repeat failed", e) }
                         }
