@@ -499,9 +499,12 @@ class WebRtcManager(
     fun setTorch(level: Int): Boolean {
         if (role != Role.CAMERA_STREAMER) return false
 
-        // Torch is only possible when back camera is NOT in use by the capturer
+        // If back camera is in use by WebRTC, we must inject the torch request via reflection
         if (currentCameraMode == "back" || currentCameraMode == "both") {
-            Log.w(TAG, "setTorch: Back camera in use by WebRTC (mode=$currentCameraMode), torch unavailable")
+            val capturer = if (currentCameraMode == "both") secondaryVideoCapturer else videoCapturer
+            if (capturer != null) {
+                return setWebRtcTorch(capturer, level)
+            }
             return false
         }
 
@@ -533,6 +536,95 @@ class WebRtcManager(
         } catch (e: Exception) {
             Log.e(TAG, "setTorch failed", e)
             false
+        }
+    }
+
+    private fun setWebRtcTorch(capturer: org.webrtc.VideoCapturer, level: Int): Boolean {
+        try {
+            var clazz: Class<*>? = capturer.javaClass
+            while (clazz != null && clazz.name != "org.webrtc.CameraCapturer") {
+                clazz = clazz.superclass
+            }
+            if (clazz == null) return false
+
+            val stateLockField = clazz.getDeclaredField("stateLock")
+            stateLockField.isAccessible = true
+            val stateLock = stateLockField.get(capturer)
+
+            val currentSessionField = clazz.getDeclaredField("currentSession")
+            currentSessionField.isAccessible = true
+            val session = synchronized(stateLock) { currentSessionField.get(capturer) } ?: return false
+
+            if (session.javaClass.name != "org.webrtc.Camera2Session") return false
+
+            val captureSessionField = session.javaClass.getDeclaredField("captureSession")
+            captureSessionField.isAccessible = true
+            val captureSession = captureSessionField.get(session) as? android.hardware.camera2.CameraCaptureSession ?: return false
+
+            val cameraDeviceField = session.javaClass.getDeclaredField("cameraDevice")
+            cameraDeviceField.isAccessible = true
+            val cameraDevice = cameraDeviceField.get(session) as? android.hardware.camera2.CameraDevice ?: return false
+
+            val surfaceField = session.javaClass.getDeclaredField("surface")
+            surfaceField.isAccessible = true
+            val surface = surfaceField.get(session) as? android.view.Surface ?: return false
+
+            val handlerField = session.javaClass.getDeclaredField("cameraThreadHandler")
+            handlerField.isAccessible = true
+            val handler = handlerField.get(session) as? android.os.Handler
+
+            val builder = cameraDevice.createCaptureRequest(android.hardware.camera2.CameraDevice.TEMPLATE_RECORD)
+            builder.addTarget(surface)
+
+            try {
+                val formatField = session.javaClass.getDeclaredField("captureFormat")
+                formatField.isAccessible = true
+                val captureFormat = formatField.get(session)
+                
+                val fpsUnitFactorField = session.javaClass.getDeclaredField("fpsUnitFactor")
+                fpsUnitFactorField.isAccessible = true
+                val fpsUnitFactor = fpsUnitFactorField.getInt(session)
+                
+                if (captureFormat != null && fpsUnitFactor > 0) {
+                    val framerateField = captureFormat.javaClass.getField("framerate")
+                    val framerateObj = framerateField.get(captureFormat)
+                    val minField = framerateObj.javaClass.getField("min")
+                    val maxField = framerateObj.javaClass.getField("max")
+                    val min = minField.getInt(framerateObj) / fpsUnitFactor
+                    val max = maxField.getInt(framerateObj) / fpsUnitFactor
+                    builder.set(android.hardware.camera2.CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, android.util.Range(min, max))
+                }
+                
+                builder.set(android.hardware.camera2.CaptureRequest.CONTROL_MODE, android.hardware.camera2.CaptureRequest.CONTROL_MODE_AUTO)
+                builder.set(android.hardware.camera2.CaptureRequest.CONTROL_AF_MODE, android.hardware.camera2.CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO)
+                builder.set(android.hardware.camera2.CaptureRequest.CONTROL_AE_MODE, android.hardware.camera2.CaptureRequest.CONTROL_AE_MODE_ON)
+                builder.set(android.hardware.camera2.CaptureRequest.CONTROL_AWB_MODE, android.hardware.camera2.CaptureRequest.CONTROL_AWB_MODE_AUTO)
+            } catch (e: Exception) {
+                Log.w(TAG, "setWebRtcTorch: Could not restore capture format: ${e.message}")
+            }
+
+            if (level > 0) {
+                builder.set(android.hardware.camera2.CaptureRequest.FLASH_MODE, android.hardware.camera2.CaptureRequest.FLASH_MODE_TORCH)
+            } else {
+                builder.set(android.hardware.camera2.CaptureRequest.FLASH_MODE, android.hardware.camera2.CaptureRequest.FLASH_MODE_OFF)
+            }
+
+            val captureCallback = object : android.hardware.camera2.CameraCaptureSession.CaptureCallback() {
+                override fun onCaptureFailed(
+                    session: android.hardware.camera2.CameraCaptureSession,
+                    request: android.hardware.camera2.CaptureRequest,
+                    failure: android.hardware.camera2.CaptureFailure
+                ) {
+                    Log.e(TAG, "WebRTC Torch capture failed: ${failure.reason}")
+                }
+            }
+
+            captureSession.setRepeatingRequest(builder.build(), captureCallback, handler)
+            
+            return true
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to set WebRTC torch via reflection", e)
+            return false
         }
     }
 

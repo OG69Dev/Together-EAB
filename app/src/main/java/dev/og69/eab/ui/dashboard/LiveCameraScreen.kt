@@ -58,6 +58,14 @@ fun LiveCameraScreen(onBack: () -> Unit) {
     val context = LocalContext.current
     val eglBase = remember { EglBase.create() }
     
+    val view = androidx.compose.ui.platform.LocalView.current
+    DisposableEffect(view) {
+        view.keepScreenOn = true
+        onDispose {
+            view.keepScreenOn = false
+        }
+    }
+    
     var isMuted by remember { mutableStateOf(false) }
     var cameraMode by remember { mutableStateOf("front") } // front, back, both
     
@@ -412,28 +420,17 @@ fun LiveCameraScreen(onBack: () -> Unit) {
                             }
 
                             // Flashlight Dimmer
-                            val flashUnavailable = cameraMode == "back" || cameraMode == "both"
-                            
                             Spacer(Modifier.height(14.dp))
-                            HorizontalDivider(color = Color.White.copy(alpha = 0.1f))
+                            androidx.compose.material3.HorizontalDivider(color = Color.White.copy(alpha = 0.1f))
                             Spacer(Modifier.height(10.dp))
                             Column(
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                modifier = Modifier.alpha(if (flashUnavailable) 0.5f else 1f)
+                                horizontalAlignment = Alignment.CenterHorizontally
                             ) {
                                 Text(
                                     "Flashlight",
                                     color = Color.White.copy(alpha = 0.7f),
                                     style = MaterialTheme.typography.labelMedium
                                 )
-                                if (flashUnavailable) {
-                                    Text(
-                                        "Unavailable when back camera is active",
-                                        color = Color(0xFFF87171),
-                                        style = MaterialTheme.typography.labelSmall,
-                                        modifier = Modifier.padding(top = 2.dp)
-                                    )
-                                }
                                 Spacer(Modifier.height(8.dp))
                                 Row(
                                     verticalAlignment = Alignment.CenterVertically,
@@ -451,7 +448,6 @@ fun LiveCameraScreen(onBack: () -> Unit) {
                                         onValueChangeFinished = {
                                             WebSocketService.setFlashlight(flashSlider.toInt())
                                         },
-                                        enabled = !flashUnavailable,
                                         valueRange = 0f..flashlightMax.toFloat().coerceAtLeast(1f),
                                         steps = (flashlightMax - 1).coerceAtLeast(0),
                                         modifier = Modifier
