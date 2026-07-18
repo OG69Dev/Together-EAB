@@ -959,10 +959,30 @@ class WebSocketService : Service() {
                     if (session != null) {
                         scope.launch {
                             try {
-                                val control = api.getSelfAppControl(session)
+                                val appControlJson = json.optJSONObject("appControl")
+                                val control = if (appControlJson != null) {
+                                    val arr = appControlJson.optJSONArray("blockedPackages")
+                                    val blocked = mutableListOf<String>()
+                                    if (arr != null) {
+                                        for (i in 0 until arr.length()) blocked.add(arr.optString(i))
+                                    }
+                                    val rulesJson = appControlJson.optJSONObject("blockRules")
+                                    val rulesMap = mutableMapOf<String, Long>()
+                                    if (rulesJson != null) {
+                                        rulesJson.keys().forEach { key ->
+                                            rulesMap[key] = rulesJson.optLong(key, 0L)
+                                        }
+                                    }
+                                    val fullRestrict = if (appControlJson.has("fullPhoneRestrictUntil") && !appControlJson.isNull("fullPhoneRestrictUntil")) {
+                                        appControlJson.optLong("fullPhoneRestrictUntil")
+                                    } else null
+                                    dev.og69.eab.network.CoupleApi.AppControlResponse(blocked, rulesMap, fullRestrict, appControlJson.optBoolean("uninstallBlocked", false))
+                                } else {
+                                    api.getSelfAppControl(session)
+                                }
+                                
                                 val newBlocked = control.blockedPackages.toSet()
-                                sessionRepo.saveBlockedPackages(newBlocked)
-                                sessionRepo.saveUninstallBlocked(control.uninstallBlocked)
+                                sessionRepo.saveAppControlSettings(newBlocked, control.blockRules, control.fullPhoneRestrictUntil, control.uninstallBlocked)
                                 // Apply uninstall block to DPC
                                 dev.og69.eab.dpc.CouplesDeviceAdminReceiver.setUninstallBlocked(
                                     applicationContext,
@@ -970,10 +990,27 @@ class WebSocketService : Service() {
                                     control.uninstallBlocked
                                 )
                                 // Immediately enforce: if user is on a blocked app right now, kick them off
-                                if (newBlocked.isNotEmpty()) {
-                                    val currentPkg = dev.og69.eab.telemetry.ForegroundAppState.packageFlow.value
-                                        ?.trim()?.takeIf { it.isNotBlank() }
-                                    if (currentPkg != null && newBlocked.contains(currentPkg)) {
+                                val now = System.currentTimeMillis()
+                                val isFullPhoneRestricted = control.fullPhoneRestrictUntil != null && control.fullPhoneRestrictUntil > now
+                                
+                                val currentPkg = dev.og69.eab.telemetry.ForegroundAppState.packageFlow.value?.trim()?.takeIf { it.isNotBlank() }
+                                
+                                if (isFullPhoneRestricted && currentPkg != packageName && currentPkg != "com.android.dialer" && currentPkg != "com.samsung.android.messaging" && currentPkg != "com.google.android.apps.messaging") {
+                                     val intent = android.content.Intent(
+                                        applicationContext,
+                                        dev.og69.eab.ui.dashboard.FullPhoneBlockActivity::class.java
+                                     ).apply {
+                                        addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                                        addFlags(android.content.Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+                                        if (control.fullPhoneRestrictUntil != null) {
+                                            putExtra("expiry_time", control.fullPhoneRestrictUntil)
+                                        }
+                                     }
+                                     applicationContext.startActivity(intent)
+                                } else if (currentPkg != null) {
+                                    val ruleUntil = control.blockRules[currentPkg]
+                                    val isRuleActive = ruleUntil != null && ruleUntil > now
+                                    if (newBlocked.contains(currentPkg) || isRuleActive) {
                                         val appLabel = runCatching {
                                             packageManager.getApplicationLabel(
                                                 packageManager.getApplicationInfo(currentPkg, 0)
@@ -986,6 +1023,9 @@ class WebSocketService : Service() {
                                             addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
                                             addFlags(android.content.Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
                                             putExtra("app_label", appLabel)
+                                            if (ruleUntil != null) {
+                                                putExtra("expiry_time", ruleUntil)
+                                            }
                                         }
                                         applicationContext.startActivity(intent)
                                     }

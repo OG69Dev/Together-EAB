@@ -11,9 +11,9 @@
       "type": "SINGLE",
       "filters": [],
       "attributes": [],
-      "versionCode": 23,
-      "versionName": "1.2.1",
-      "outputFile": "TogetherEAB V1.2.1-release.apk"
+      "versionCode": 25,
+      "versionName": "1.2.3",
+      "outputFile": "TogetherEAB V1.2.3-release.apk"
     }
   ],
   "elementType": "File",
@@ -22,14 +22,14 @@
       "minApi": 28,
       "maxApi": 30,
       "baselineProfiles": [
-        "baselineProfiles/1/TogetherEAB V1.2.1-release.dm"
+        "baselineProfiles/1/TogetherEAB V1.2.3-release.dm"
       ]
     },
     {
       "minApi": 31,
       "maxApi": 2147483647,
       "baselineProfiles": [
-        "baselineProfiles/0/TogetherEAB V1.2.1-release.dm"
+        "baselineProfiles/0/TogetherEAB V1.2.3-release.dm"
       ]
     }
   ],

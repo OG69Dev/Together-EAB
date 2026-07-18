@@ -459,11 +459,31 @@ class CoupleApi(
         }
     }
 
-    suspend fun postAppControl(session: Session, blockedPackages: List<String>, uninstallBlocked: Boolean) = withContext(Dispatchers.IO) {
+    suspend fun postAppControl(
+        session: Session, 
+        blockedPackages: List<String>, 
+        blockRules: Map<String, Long>,
+        fullPhoneRestrictUntil: Long?,
+        uninstallBlocked: Boolean
+    ) = withContext(Dispatchers.IO) {
         val url = "${baseUrl()}/api/couple/${session.coupleId}/app-control"
+        
+        val blockRulesJson = JSONObject()
+        for ((pkg, until) in blockRules) {
+            blockRulesJson.put(pkg, until)
+        }
+        
         val payload = JSONObject()
             .put("blockedPackages", JSONArray(blockedPackages))
+            .put("blockRules", blockRulesJson)
             .put("uninstallBlocked", uninstallBlocked)
+        
+        if (fullPhoneRestrictUntil != null) {
+            payload.put("fullPhoneRestrictUntil", fullPhoneRestrictUntil)
+        } else {
+            payload.put("fullPhoneRestrictUntil", JSONObject.NULL)
+        }
+            
         val req = Request.Builder()
             .url(url)
             .addHeader("Authorization", "Bearer ${session.deviceToken}")
@@ -491,8 +511,21 @@ class CoupleApi(
                     blocked.add(arr.optString(i))
                 }
             }
+            val rulesJson = j.optJSONObject("blockRules")
+            val rulesMap = mutableMapOf<String, Long>()
+            if (rulesJson != null) {
+                rulesJson.keys().forEach { key ->
+                    rulesMap[key] = rulesJson.optLong(key, 0L)
+                }
+            }
+            val fullRestrict = if (j.has("fullPhoneRestrictUntil") && !j.isNull("fullPhoneRestrictUntil")) {
+                j.optLong("fullPhoneRestrictUntil")
+            } else null
+            
             AppControlResponse(
                 blockedPackages = blocked,
+                blockRules = rulesMap,
+                fullPhoneRestrictUntil = fullRestrict,
                 uninstallBlocked = j.optBoolean("uninstallBlocked", false)
             )
         }
@@ -500,6 +533,8 @@ class CoupleApi(
 
     data class AppControlResponse(
         val blockedPackages: List<String>,
+        val blockRules: Map<String, Long>,
+        val fullPhoneRestrictUntil: Long?,
         val uninstallBlocked: Boolean
     )
 
@@ -569,7 +604,20 @@ class CoupleApi(
                 if (arr != null) {
                     for (i in 0 until arr.length()) blocked.add(arr.optString(i))
                 }
-                AppControlResponse(blocked, it.optBoolean("uninstallBlocked", false))
+                
+                val rulesJson = it.optJSONObject("blockRules")
+                val rulesMap = mutableMapOf<String, Long>()
+                if (rulesJson != null) {
+                    rulesJson.keys().forEach { key ->
+                        rulesMap[key] = rulesJson.optLong(key, 0L)
+                    }
+                }
+                
+                val fullRestrict = if (it.has("fullPhoneRestrictUntil") && !it.isNull("fullPhoneRestrictUntil")) {
+                    it.optLong("fullPhoneRestrictUntil")
+                } else null
+                
+                AppControlResponse(blocked, rulesMap, fullRestrict, it.optBoolean("uninstallBlocked", false))
             }
         )
     }

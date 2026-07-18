@@ -53,6 +53,8 @@ class SessionRepository(context: Context) {
         val latestMediaHash = stringPreferencesKey("latest_media_hash")
         val latestAppsHash = stringPreferencesKey("latest_apps_hash")
         val blockedPackages = stringPreferencesKey("blocked_packages") // Comma separated
+        val blockRules = stringPreferencesKey("block_rules") // JSON
+        val fullPhoneRestrictUntil = androidx.datastore.preferences.core.longPreferencesKey("full_phone_restrict_until")
         val uninstallBlocked = booleanPreferencesKey("uninstall_blocked")
     }
 
@@ -244,16 +246,48 @@ class SessionRepository(context: Context) {
 
     suspend fun getBlockedPackages(): Set<String> = blockedPackagesFlow.first()
 
-    suspend fun saveBlockedPackages(packages: Set<String>) {
+    val blockRulesFlow: Flow<Map<String, Long>> = ds.data.map { prefs ->
+        val raw = prefs[Keys.blockRules] ?: return@map emptyMap()
+        try {
+            val json = org.json.JSONObject(raw)
+            val map = mutableMapOf<String, Long>()
+            json.keys().forEach { key ->
+                map[key] = json.optLong(key, 0L)
+            }
+            map
+        } catch (_: Exception) {
+            emptyMap()
+        }
+    }
+    
+    val fullPhoneRestrictUntilFlow: Flow<Long?> = ds.data.map { prefs ->
+        prefs[Keys.fullPhoneRestrictUntil]
+    }
+
+    suspend fun saveAppControlSettings(
+        packages: Set<String>, 
+        rules: Map<String, Long>, 
+        fullRestrictUntil: Long?, 
+        uninstallBlocked: Boolean
+    ) {
         val arr = org.json.JSONArray(packages.toList())
-        ds.edit { it[Keys.blockedPackages] = arr.toString() }
+        val rulesJson = org.json.JSONObject()
+        for ((pkg, until) in rules) {
+            rulesJson.put(pkg, until)
+        }
+        ds.edit { prefs ->
+            prefs[Keys.blockedPackages] = arr.toString()
+            prefs[Keys.blockRules] = rulesJson.toString()
+            if (fullRestrictUntil != null) {
+                prefs[Keys.fullPhoneRestrictUntil] = fullRestrictUntil
+            } else {
+                prefs.remove(Keys.fullPhoneRestrictUntil)
+            }
+            prefs[Keys.uninstallBlocked] = uninstallBlocked
+        }
     }
 
     val uninstallBlockedFlow: Flow<Boolean> = ds.data.map { it[Keys.uninstallBlocked] == true }
-
-    suspend fun saveUninstallBlocked(value: Boolean) {
-        ds.edit { it[Keys.uninstallBlocked] = value }
-    }
 
 
     data class CachedProfile(

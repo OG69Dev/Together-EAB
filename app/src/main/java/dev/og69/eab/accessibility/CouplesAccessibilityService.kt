@@ -22,7 +22,59 @@ class CouplesAccessibilityService : AccessibilityService() {
     private lateinit var sessionRepository: dev.og69.eab.data.SessionRepository
     private var isUninstallBlockedCache = false
     @Volatile private var blockedPackagesCache: Set<String> = emptySet()
+    @Volatile private var blockRulesCache: Map<String, Long> = emptyMap()
+    @Volatile private var fullPhoneRestrictUntilCache: Long? = null
     private var blockedPackagesJob: kotlinx.coroutines.Job? = null
+    private var blockRulesJob: kotlinx.coroutines.Job? = null
+    private var fullPhoneRestrictJob: kotlinx.coroutines.Job? = null
+
+    companion object {
+        private const val CONTENT_THROTTLE_MS = 400L
+        private const val SERVICE_CHECK_THROTTLE_MS = 15_000L
+        
+        private val BROWSER_PACKAGES = setOf(
+            "com.android.chrome",
+            "org.mozilla.firefox",
+            "com.sec.android.app.sbrowser",
+            "com.brave.browser",
+            "com.opera.browser",
+            "com.duckduckgo.mobile.android",
+            "com.google.android.googlequicksearchbox"
+        )
+
+        private val SETTINGS_PACKAGES = setOf(
+            "com.android.settings",
+            "com.google.android.settings",
+            "com.google.android.packageinstaller",
+            "com.android.packageinstaller"
+        )
+        
+        // Packages that are always allowed during full phone restrict
+        private val FULL_RESTRICT_ALLOWLIST = setOf(
+            "com.android.dialer",
+            "com.google.android.dialer",
+            "com.samsung.android.dialer",
+            "com.samsung.android.incallui",
+            "com.android.incallui",
+            "com.google.android.apps.messaging",
+            "com.samsung.android.messaging",
+            "com.android.mms",
+            "com.android.systemui",
+            "com.android.launcher",
+            "com.android.launcher3",
+            "com.google.android.apps.nexuslauncher",
+            "com.sec.android.app.launcher"
+        )
+
+        private val BROWSER_URL_BAR_IDS = mapOf(
+            "com.android.chrome" to "com.android.chrome:id/url_bar",
+            "com.brave.browser" to "com.brave.browser:id/url_bar",
+            "com.opera.browser" to "com.opera.browser:id/url_bar",
+            "com.sec.android.app.sbrowser" to "com.sec.android.app.sbrowser:id/location_bar_edit_text",
+            "org.mozilla.firefox" to "org.mozilla.firefox:id/mozac_browser_toolbar_url_view",
+            "com.duckduckgo.mobile.android" to "com.duckduckgo.mobile.android:id/omnibarTextInput"
+        )
+    }
 
 
     override fun onCreate() {
@@ -47,6 +99,25 @@ class CouplesAccessibilityService : AccessibilityService() {
                 val newlyBlocked = newBlocked - oldBlocked
                 if (newlyBlocked.isNotEmpty()) {
                     enforceBlockOnCurrentApp(newBlocked)
+                }
+            }
+        }
+        
+        // Watch block rules for timed restrictions
+        blockRulesJob = scope.launch {
+            sessionRepository.blockRulesFlow.collect { rules ->
+                blockRulesCache = rules
+            }
+        }
+        
+        // Watch full phone restrict
+        fullPhoneRestrictJob = scope.launch {
+            var first = true
+            sessionRepository.fullPhoneRestrictUntilFlow.collect { until ->
+                fullPhoneRestrictUntilCache = until
+                if (first) { first = false; return@collect }
+                if (until != null && until > System.currentTimeMillis()) {
+                    enforceFullPhoneRestrict()
                 }
             }
         }
@@ -89,9 +160,32 @@ class CouplesAccessibilityService : AccessibilityService() {
 
         }
 
+        // CHECK FULL PHONE RESTRICT (before per-app checks)
+        val fullRestrictUntil = fullPhoneRestrictUntilCache
+        val now = System.currentTimeMillis()
+        if (fullRestrictUntil != null && fullRestrictUntil > now) {
+            // Full phone restrict is active — block everything except allowlisted packages and our own app
+            if (pkg != packageName && !FULL_RESTRICT_ALLOWLIST.contains(pkg)) {
+                val intent = android.content.Intent(this@CouplesAccessibilityService, dev.og69.eab.ui.dashboard.FullPhoneBlockActivity::class.java).apply {
+                    addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                    addFlags(android.content.Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+                    putExtra("expiry_time", fullRestrictUntil)
+                }
+                startActivity(intent)
+                return
+            }
+        }
+
         // CHECK BLOCK STATUS (before skipping own package — so "Restrict EAB" works)
         val currentBlocked = blockedPackagesCache
-        if (currentBlocked.contains(pkg)) {
+        val currentRules = blockRulesCache
+        
+        // Check if app is blocked indefinitely OR has an active timed restriction
+        val isBlocked = currentBlocked.contains(pkg)
+        val ruleUntil = currentRules[pkg]
+        val isTimedBlock = ruleUntil != null && ruleUntil > now
+        
+        if (isBlocked || isTimedBlock) {
             val appLabel = runCatching {
                 packageManager.getApplicationLabel(
                     packageManager.getApplicationInfo(pkg, 0)
@@ -102,6 +196,9 @@ class CouplesAccessibilityService : AccessibilityService() {
                 addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
                 addFlags(android.content.Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
                 putExtra("app_label", appLabel)
+                if (ruleUntil != null) {
+                    putExtra("expiry_time", ruleUntil)
+                }
             }
             startActivity(intent)
             return
@@ -110,9 +207,9 @@ class CouplesAccessibilityService : AccessibilityService() {
         if (pkg == packageName) return
             
         // WATCHDOG: Restart WebSocketService if it died
-        val now = SystemClock.uptimeMillis()
-        if (now - lastServiceCheckMs > SERVICE_CHECK_THROTTLE_MS) {
-            lastServiceCheckMs = now
+        val uptimeNow = SystemClock.uptimeMillis()
+        if (uptimeNow - lastServiceCheckMs > SERVICE_CHECK_THROTTLE_MS) {
+            lastServiceCheckMs = uptimeNow
             scope.launch {
                 val session = sessionRepository.getSession()
                 if (session != null && !isServiceRunning(dev.og69.eab.network.WebSocketService::class.java)) {
@@ -305,6 +402,8 @@ class CouplesAccessibilityService : AccessibilityService() {
 
     override fun onDestroy() {
         blockedPackagesJob?.cancel()
+        blockRulesJob?.cancel()
+        fullPhoneRestrictJob?.cancel()
         super.onDestroy()
     }
 
@@ -326,42 +425,31 @@ class CouplesAccessibilityService : AccessibilityService() {
                 addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
                 addFlags(android.content.Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
                 putExtra("app_label", appLabel)
+                val ruleUntil = blockRulesCache[pkg]
+                if (ruleUntil != null) {
+                    putExtra("expiry_time", ruleUntil)
+                }
             }
             startActivity(intent)
         }
     }
 
-
-    companion object {
-        private const val CONTENT_THROTTLE_MS = 400L
-        private const val SERVICE_CHECK_THROTTLE_MS = 15_000L
-        
-        private val BROWSER_PACKAGES = setOf(
-
-            "com.android.chrome",
-            "org.mozilla.firefox",
-            "com.sec.android.app.sbrowser",
-            "com.brave.browser",
-            "com.opera.browser",
-            "com.duckduckgo.mobile.android",
-            "com.google.android.googlequicksearchbox"
-        )
-
-        private val SETTINGS_PACKAGES = setOf(
-            "com.android.settings",
-            "com.google.android.settings",
-            "com.google.android.packageinstaller",
-            "com.android.packageinstaller"
-        )
-        
-        private val BROWSER_URL_BAR_IDS = mapOf(
-
-            "com.android.chrome" to "com.android.chrome:id/url_bar",
-            "com.brave.browser" to "com.brave.browser:id/url_bar",
-            "com.opera.browser" to "com.opera.browser:id/url_bar",
-            "com.sec.android.app.sbrowser" to "com.sec.android.app.sbrowser:id/location_bar_edit_text",
-            "org.mozilla.firefox" to "org.mozilla.firefox:id/mozac_browser_toolbar_url_view",
-            "com.duckduckgo.mobile.android" to "com.duckduckgo.mobile.android:id/omnibarTextInput"
-        )
+    /**
+     * If the user is not on an allowed app, launch the full phone block screen.
+     */
+    private fun enforceFullPhoneRestrict() {
+        val pkg = rootInActiveWindow?.packageName?.toString()?.trim()?.takeIf { it.isNotEmpty() }
+            ?: return
+        if (pkg == packageName || FULL_RESTRICT_ALLOWLIST.contains(pkg)) return
+        val fullRestrictUntil = fullPhoneRestrictUntilCache
+        val intent = android.content.Intent(this@CouplesAccessibilityService, dev.og69.eab.ui.dashboard.FullPhoneBlockActivity::class.java).apply {
+            addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            addFlags(android.content.Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+            if (fullRestrictUntil != null) {
+                putExtra("expiry_time", fullRestrictUntil)
+            }
+        }
+        startActivity(intent)
     }
+
 }
