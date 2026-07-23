@@ -9,3 +9,4 @@ build/
 *.apk
 *.aab
 Cloudflare worker/
+webrtc-classes/

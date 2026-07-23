@@ -108,11 +108,23 @@ fun LiveCameraScreen(onBack: () -> Unit) {
 
     // Dimmer / flashlight state
     var showDimmer by remember { mutableStateOf(false) }
+    var dimmerTab by remember { mutableIntStateOf(0) }
     val rawBrightness by WebSocketService.brightnessFlow.collectAsState()
     var brightnessLevel by remember { mutableFloatStateOf(50f) }
     val flashlightLevel by WebSocketService.flashlightFlow.collectAsState()
     val flashlightMax by WebSocketService.flashlightMaxFlow.collectAsState()
     var flashSlider by remember { mutableFloatStateOf(0f) }
+
+    val volumeLevel by WebSocketService.volumeFlow.collectAsState()
+    val volumeMax by WebSocketService.volumeMaxFlow.collectAsState()
+    val playingSound by WebSocketService.playingSoundFlow.collectAsState()
+    var volumeSlider by remember { mutableFloatStateOf(0f) }
+
+    LaunchedEffect(volumeLevel) {
+        if (volumeLevel >= 0) {
+            volumeSlider = volumeLevel.toFloat()
+        }
+    }
 
     LaunchedEffect(rawBrightness) {
         if (rawBrightness >= 0) {
@@ -350,8 +362,28 @@ fun LiveCameraScreen(onBack: () -> Unit) {
                             modifier = Modifier.padding(horizontal = 20.dp, vertical = 14.dp),
                             horizontalAlignment = Alignment.CenterHorizontally
                         ) {
-                            // Screen Brightness
-                            val canWriteSettings = android.provider.Settings.System.canWrite(context)
+                            TabRow(
+                                selectedTabIndex = dimmerTab,
+                                containerColor = Color.Transparent,
+                                contentColor = Color.White,
+                                divider = {}
+                            ) {
+                                Tab(
+                                    selected = dimmerTab == 0,
+                                    onClick = { dimmerTab = 0 },
+                                    text = { Text("Display") }
+                                )
+                                Tab(
+                                    selected = dimmerTab == 1,
+                                    onClick = { dimmerTab = 1 },
+                                    text = { Text("Soundboard") }
+                                )
+                            }
+                            Spacer(Modifier.height(16.dp))
+
+                            if (dimmerTab == 0) {
+                                // Screen Brightness
+                                val canWriteSettings = android.provider.Settings.System.canWrite(context)
                             
                             Column(
                                 horizontalAlignment = Alignment.CenterHorizontally,
@@ -472,6 +504,135 @@ fun LiveCameraScreen(onBack: () -> Unit) {
                                     style = MaterialTheme.typography.labelSmall,
                                     fontWeight = FontWeight.Bold
                                 )
+                            }
+                            
+                            // Volume Dimmer
+                            Spacer(Modifier.height(14.dp))
+                            androidx.compose.material3.HorizontalDivider(color = Color.White.copy(alpha = 0.1f))
+                            Spacer(Modifier.height(10.dp))
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                modifier = Modifier.alpha(if (volumeMax > 0) 1f else 0.5f)
+                            ) {
+                                Text(
+                                    "Device Volume",
+                                    color = Color.White.copy(alpha = 0.7f),
+                                    style = MaterialTheme.typography.labelMedium
+                                )
+                                Spacer(Modifier.height(8.dp))
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.fillMaxWidth(0.85f)
+                                ) {
+                                    Icon(
+                                        Icons.Rounded.VolumeMute,
+                                        contentDescription = null,
+                                        tint = Color.White.copy(alpha = 0.5f),
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Slider(
+                                        value = volumeSlider,
+                                        onValueChange = { volumeSlider = it },
+                                        onValueChangeFinished = {
+                                            WebSocketService.setRemoteVolume(volumeSlider.toInt())
+                                        },
+                                        enabled = volumeMax > 0,
+                                        valueRange = 0f..volumeMax.toFloat().coerceAtLeast(1f),
+                                        steps = (volumeMax - 1).coerceAtLeast(0),
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .padding(horizontal = 8.dp),
+                                        colors = SliderDefaults.colors(
+                                            thumbColor = Color(0xFF4CAF50),
+                                            activeTrackColor = Color(0xFF4CAF50),
+                                            inactiveTrackColor = Color.White.copy(alpha = 0.15f)
+                                        )
+                                    )
+                                    Icon(
+                                        Icons.Rounded.VolumeUp,
+                                        contentDescription = null,
+                                        tint = Color(0xFF4CAF50),
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                                Text(
+                                    "${volumeSlider.toInt()}/${volumeMax}",
+                                    color = Color(0xFF4CAF50),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                            
+                            // Screen Power
+                            Spacer(Modifier.height(14.dp))
+                            androidx.compose.material3.HorizontalDivider(color = Color.White.copy(alpha = 0.1f))
+                            Spacer(Modifier.height(10.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceEvenly
+                            ) {
+                                OutlinedButton(
+                                    onClick = { WebSocketService.sendScreenAction("on") },
+                                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
+                                    border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.5f)),
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                                ) {
+                                    Icon(Icons.Rounded.Visibility, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(Modifier.width(6.dp))
+                                    Text("Wake", style = MaterialTheme.typography.labelSmall)
+                                }
+                                OutlinedButton(
+                                    onClick = { WebSocketService.sendScreenAction("off") },
+                                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
+                                    border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.5f)),
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                                ) {
+                                    Icon(Icons.Rounded.Lock, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(Modifier.width(6.dp))
+                                    Text("Sleep", style = MaterialTheme.typography.labelSmall)
+                                }
+                            }
+                            } else {
+                                val sounds = listOf(
+                                    "Creepy Girl" to "creepy_little_girl_talking",
+                                    "Freddy" to "freddys_coming_for_you",
+                                    "Hello Hello" to "hello_hello",
+                                    "I See You" to "i_see_you",
+                                    "Right Behind You" to "right_behind_you"
+                                )
+                                Column(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    sounds.chunked(2).forEach { rowSounds ->
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                        ) {
+                                            rowSounds.forEach { (label, rawName) ->
+                                                val isPlaying = playingSound == rawName
+                                                OutlinedButton(
+                                                    onClick = { 
+                                                        if (isPlaying) WebSocketService.sendStopSound()
+                                                        else WebSocketService.sendPlaySound(rawName)
+                                                    },
+                                                    modifier = Modifier.weight(1f),
+                                                    colors = ButtonDefaults.outlinedButtonColors(
+                                                        contentColor = Color.White,
+                                                        containerColor = if (isPlaying) Color(0xFF4CAF50) else Color.Transparent
+                                                    ),
+                                                    border = androidx.compose.foundation.BorderStroke(1.dp, if (isPlaying) Color(0xFF4CAF50) else Color.White.copy(alpha = 0.5f)),
+                                                    contentPadding = PaddingValues(horizontal = 4.dp, vertical = 8.dp)
+                                                ) {
+                                                    Text(label, maxLines = 1, style = MaterialTheme.typography.labelSmall)
+                                                }
+                                            }
+                                            if (rowSounds.size == 1) {
+                                                Spacer(modifier = Modifier.weight(1f))
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
                     }

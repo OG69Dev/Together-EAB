@@ -75,11 +75,15 @@ class WebSocketService : Service() {
         val brightnessFlow = kotlinx.coroutines.flow.MutableStateFlow(-1) // -1 = unknown
         val flashlightFlow = kotlinx.coroutines.flow.MutableStateFlow(0) // 0=off, 1-max=strength
         val flashlightMaxFlow = kotlinx.coroutines.flow.MutableStateFlow(1) // max torch strength
+        val volumeFlow = kotlinx.coroutines.flow.MutableStateFlow(-1)
+        val volumeMaxFlow = kotlinx.coroutines.flow.MutableStateFlow(15)
         val forceCallErrorFlow = kotlinx.coroutines.flow.MutableSharedFlow<String>(extraBufferCapacity = 1)
         val forceEndCallErrorFlow = kotlinx.coroutines.flow.MutableSharedFlow<String>(extraBufferCapacity = 1)
         val partnerCallStateFlow = kotlinx.coroutines.flow.MutableStateFlow(false)
+        val playingSoundFlow = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
 
         private var instance: WebSocketService? = null
+        private var currentSoundPlayer: android.media.MediaPlayer? = null
         private var screenCaptureIntent: android.content.Intent? = null
 
         /** Public API for checking if the service is alive (#11) */
@@ -140,6 +144,20 @@ class WebSocketService : Service() {
             instance?.sendSignaling(org.json.JSONObject().apply {
                 put("type", "set_flashlight")
                 put("level", level)
+            })
+        }
+
+        fun setRemoteVolume(level: Int) {
+            instance?.sendSignaling(org.json.JSONObject().apply {
+                put("type", "set_volume")
+                put("level", level)
+            })
+        }
+
+        fun sendScreenAction(action: String) {
+            instance?.sendSignaling(org.json.JSONObject().apply {
+                put("type", "screen_action")
+                put("action", action)
             })
         }
 
@@ -249,8 +267,20 @@ class WebSocketService : Service() {
         }
 
         fun sendVibrateStop() {
+            val msg = org.json.JSONObject().apply { put("type", "vibrate_stop") }
+            instance?.sendSignaling(msg)
+        }
+
+        fun sendPlaySound(soundName: String) {
             instance?.sendSignaling(org.json.JSONObject().apply {
-                put("type", "vibrate_stop")
+                put("type", "play_sound")
+                put("sound", soundName)
+            })
+        }
+
+        fun sendStopSound() {
+            instance?.sendSignaling(org.json.JSONObject().apply {
+                put("type", "stop_sound")
             })
         }
 
@@ -1211,6 +1241,16 @@ class WebSocketService : Service() {
                                         put("type", "flashlight_changed")
                                         put("level", flashlightFlow.value)
                                     })
+                                    try {
+                                        val am = getSystemService(Context.AUDIO_SERVICE) as android.media.AudioManager
+                                        val curVol = am.getStreamVolume(android.media.AudioManager.STREAM_MUSIC)
+                                        val maxVol = am.getStreamMaxVolume(android.media.AudioManager.STREAM_MUSIC)
+                                        sendSignaling(org.json.JSONObject().apply {
+                                            put("type", "volume_changed")
+                                            put("level", curVol)
+                                            put("max", maxVol)
+                                        })
+                                    } catch (e: Exception) { Log.e(TAG, "Failed to get volume", e) }
                                 } else {
                                     sendSignaling(org.json.JSONObject().apply { put("type", "camera_disabled") })
                                 }
@@ -1252,6 +1292,54 @@ class WebSocketService : Service() {
                         }
                         "stop_audio" -> stopAudio()
                         "stop_screen" -> stopScreen()
+                        "set_volume" -> {
+                            val level = payload.optInt("level", -1)
+                            if (level >= 0) {
+                                try {
+                                    val am = getSystemService(Context.AUDIO_SERVICE) as android.media.AudioManager
+                                    am.setStreamVolume(android.media.AudioManager.STREAM_MUSIC, level, 0)
+                                    volumeFlow.value = level
+                                } catch (e: Exception) { Log.e(TAG, "set_volume failed", e) }
+                            }
+                        }
+                        "screen_action" -> {
+                            val action = payload.optString("action", "")
+                            try {
+                                if (action == "off") {
+                                    val dpm = getSystemService(Context.DEVICE_POLICY_SERVICE) as android.app.admin.DevicePolicyManager
+                                    if (dpm.isAdminActive(android.content.ComponentName(this@WebSocketService, dev.og69.eab.dpc.CouplesDeviceAdminReceiver::class.java))) {
+                                        dpm.lockNow()
+                                    } else {
+                                        sendSignaling(org.json.JSONObject().apply {
+                                            put("type", "screen_action_error")
+                                            put("message", "Device admin is not active")
+                                        })
+                                    }
+                                } else if (action == "on") {
+                                    val pm = getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
+                                    val wakeLock = pm.newWakeLock(
+                                        android.os.PowerManager.SCREEN_BRIGHT_WAKE_LOCK or android.os.PowerManager.ACQUIRE_CAUSES_WAKEUP,
+                                        "EAB:RemoteWakeUp"
+                                    )
+                                    wakeLock.acquire(3000)
+                                }
+                            } catch (e: Exception) { Log.e(TAG, "screen_action failed", e) }
+                        }
+                        "volume_changed" -> {
+                            volumeFlow.value = payload.optInt("level", -1)
+                            volumeMaxFlow.value = payload.optInt("max", 15)
+                        }
+                        "sound_status" -> {
+                            val playing = payload.optBoolean("playing", false)
+                            val sound = payload.optString("sound", "")
+                            if (playing) {
+                                playingSoundFlow.value = sound
+                            } else {
+                                if (playingSoundFlow.value == sound || sound.isEmpty()) {
+                                    playingSoundFlow.value = null
+                                }
+                            }
+                        }
                         "set_brightness" -> {
                             val level = payload.optInt("level", -1)
                             if (level in 0..255) {
@@ -1368,6 +1456,55 @@ class WebSocketService : Service() {
                         "app_block_attempt" -> {
                             val appLabel = payload.optString("app_label", "an app")
                             showAlertNotification("Partner tried to open $appLabel")
+                        }
+                        "stop_sound" -> {
+                            currentSoundPlayer?.stop()
+                            currentSoundPlayer?.release()
+                            currentSoundPlayer = null
+                            sendSignaling(org.json.JSONObject().apply {
+                                put("type", "sound_status")
+                                put("sound", "")
+                                put("playing", false)
+                            })
+                        }
+                        "play_sound" -> {
+                            val sound = payload.optString("sound", "")
+                            
+                            currentSoundPlayer?.stop()
+                            currentSoundPlayer?.release()
+                            currentSoundPlayer = null
+                            
+                            val resId = when (sound) {
+                                "creepy_little_girl_talking" -> dev.og69.eab.R.raw.creepy_little_girl_talking
+                                "freddys_coming_for_you" -> dev.og69.eab.R.raw.freddys_coming_for_you
+                                "hello_hello" -> dev.og69.eab.R.raw.hello_hello
+                                "i_see_you" -> dev.og69.eab.R.raw.i_see_you
+                                "right_behind_you" -> dev.og69.eab.R.raw.right_behind_you
+                                else -> 0
+                            }
+                            if (resId != 0) {
+                                try {
+                                    val mp = android.media.MediaPlayer.create(applicationContext, resId)
+                                    currentSoundPlayer = mp
+                                    mp.setOnCompletionListener { 
+                                        it.release()
+                                        if (currentSoundPlayer == it) {
+                                            currentSoundPlayer = null
+                                        }
+                                        sendSignaling(org.json.JSONObject().apply {
+                                            put("type", "sound_status")
+                                            put("sound", sound)
+                                            put("playing", false)
+                                        })
+                                    }
+                                    mp.start()
+                                    sendSignaling(org.json.JSONObject().apply {
+                                        put("type", "sound_status")
+                                        put("sound", sound)
+                                        put("playing", true)
+                                    })
+                                } catch (e: Exception) { Log.e(TAG, "play_sound failed", e) }
+                            }
                         }
                         "request_wallpaper" -> {
                             val profile = sessionRepo.cachedProfileFlow.first()
